@@ -44,13 +44,14 @@ def get_detailed_data(game_id, game_info):
             return players + ["-"] * (9 - len(players))
 
         def get_strength_metrics(side, team_name):
-            # 1. Season Performance (The Anchor)
+            # 1. Season Performance (45% Weight)
             t_info = get_team_info(team_name)
             
             # 2. Daily Personnel Adjustments
             batters = box[side].get('batters', [])[:9]
             l_score = sum([float(get_advanced_stats(b, "hitting").get('war', 0.1)) for b in batters])
             
+            # BULLPEN BOOST: Increased multiplier for Relief WAR
             pitchers = box[side].get('pitchers', [])
             bp_score = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
@@ -58,9 +59,8 @@ def get_detailed_data(game_id, game_info):
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             fip = float(sp_data.get('fip', 4.20))
             
-            # WEIGHTING: 45% Standings (wpct), 55% Personnel (WAR/FIP)
-            # Personnel is split: 25% Lineup, 15% Bullpen, 15% Starter
-            adj_wpct = (t_info['wpct'] * 0.45) + (l_score * 0.025) + (bp_score * 0.06) + ((4.2/fip) * 0.15)
+            # REVISED WEIGHTING: 45% Standings, 12% Bullpen (up from 6%), rest for Lineup/Starter
+            adj_wpct = (t_info['wpct'] * 0.45) + (l_score * 0.025) + (bp_score * 0.12) + ((4.2/fip) * 0.15)
             
             return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": max(0.1, min(0.9, adj_wpct)), "div_id": t_info['div_id']}
 
@@ -118,4 +118,4 @@ for g in games:
                             return ['background-color: #1b5e20; color: white'] * len(row)
                     return [''] * len(row)
                 st.table(df.style.apply(highlight_winner, axis=1))
-                      
+            
