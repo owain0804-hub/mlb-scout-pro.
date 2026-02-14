@@ -56,11 +56,11 @@ def get_detailed_data(game_id, game_info):
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             pitching_skill = (float(sp_data.get('era', 4.00)) + float(sp_data.get('fip', 4.20))) / 2
             
-            # CORE WEIGHTING
+            # CORE WEIGHTING: Standings (45%), Lineup (25%), Pitching (30%)
             adj_wpct = (t_info['wpct'] * 0.45) + (l_avg * 1.0) + (l_slg * 0.8) + (bp_score * 0.12) + ((4.1/pitching_skill) * 0.15)
             
-            # UPDATED SENSITIVITY: 1.35 Power Scaling
-            spread_factor = 1.35 
+            # STABLE SENSITIVITY: 1.01 Power Scaling (Near-Linear)
+            spread_factor = 1.01 
             amplified_wpct = (adj_wpct**spread_factor) / ((adj_wpct**spread_factor) + ((1-adj_wpct)**spread_factor))
             
             return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": amplified_wpct, "div_id": t_info['div_id'], "lineup": lineup_names, "l_avg": l_avg, "l_slg": l_slg}
@@ -71,7 +71,7 @@ def get_detailed_data(game_id, game_info):
         prob_h = (pb - (pa * pb)) / (pa + pb - (2 * pa * pb)) + 0.04
         
         note = "Divisional battle." if a['div_id'] == h['div_id'] and a['div_id'] is not None else "Inter-divisional matchup."
-        return {"a": a, "h": h, "prob_h": max(0.05, min(0.95, prob_h)), "box": box, "note": note}
+        return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box, "note": note}
     except: return None
 
 st.title("⚾ MLB Intelligence: Pro")
@@ -112,4 +112,4 @@ for g in games:
                         if row.Team == winner: return ['background-color: #1b5e20; color: white'] * len(row)
                     return [''] * len(row)
                 st.table(df.style.apply(highlight_winner, axis=1))
-                
+            
