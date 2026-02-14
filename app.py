@@ -32,45 +32,43 @@ def get_detailed_data(game_id, game_info):
         box = statsapi.boxscore_data(game_id)
         
         def process_lineup(side):
-            players, avgs = [], []
+            players, avgs, slgs = [], [], []
             batters_list = box[side].get('batters', [])[:9]
-            if not batters_list: return ["Lineup TBD"] * 9, 0.250
+            if not batters_list: return ["Lineup TBD"] * 9, 0.250, 0.400
             
             for pid in batters_list:
                 p = box[side]['players'][f"ID{pid}"]
                 stats = p['stats']['batting']
-                # Current game stats
                 line = f"{stats.get('hits',0)}/{stats.get('atBats',0)}"
                 players.append(f"{p['person']['fullName']} ({line})")
                 
-                # Pull season average for the prediction model
+                # Pull season average and slugging
                 season = get_advanced_stats(pid, "hitting")
                 avgs.append(float(season.get('avg', '.250').replace('.','0.')))
+                slgs.append(float(season.get('slg', '.400').replace('.','0.')))
             
-            lineup_avg = sum(avgs) / len(avgs) if avgs else 0.250
-            return players, lineup_avg
+            l_avg = sum(avgs) / len(avgs) if avgs else 0.250
+            l_slg = sum(slgs) / len(slgs) if slgs else 0.400
+            return players, l_avg, l_slg
 
         def get_strength_metrics(side, team_name):
             t_info = get_team_info(team_name)
-            lineup_names, l_avg = process_lineup(side)
+            lineup_names, l_avg, l_slg = process_lineup(side)
             
-            # 1. Bullpen Impact (Kept High)
             pitchers = box[side].get('pitchers', [])
             bp_score = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
-            # 2. Starting Pitcher (ERA Focus)
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             pitching_skill = (float(sp_data.get('era', 4.00)) + float(sp_data.get('fip', 4.20))) / 2
             
-            # REVISED WEIGHTING: 45% Standings, 20% Lineup AVG, 12% Bullpen, 23% Starter/Other
-            adj_wpct = (t_info['wpct'] * 0.45) + (l_avg * 1.2) + (bp_score * 0.12) + ((4.1/pitching_skill) * 0.15)
+            # WEIGHTING: 45% Standings, 15% Lineup AVG, 10% Lineup SLG, 12% Bullpen, 18% Starter
+            adj_wpct = (t_info['wpct'] * 0.45) + (l_avg * 1.0) + (l_slg * 0.8) + (bp_score * 0.12) + ((4.1/pitching_skill) * 0.15)
             
-            return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": max(0.1, min(0.9, adj_wpct)), "div_id": t_info['div_id'], "lineup": lineup_names, "l_avg": l_avg}
+            return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": max(0.1, min(0.9, adj_wpct)), "div_id": t_info['div_id'], "lineup": lineup_names, "l_avg": l_avg, "l_slg": l_slg}
 
         a, h = get_strength_metrics('away', game_info['away_name']), get_strength_metrics('home', game_info['home_name'])
         
-        # Log-5 Probability Formula
         pa, pb = a['wpct'], h['wpct']
         prob_h = (pb - (pa * pb)) / (pa + pb - (2 * pa * pb)) + 0.04
         
@@ -95,7 +93,7 @@ for g in games:
                     <div style="text-align:center;">{g['home_name']}<br><b style="font-size:24px; color:#4CAF50;">{p_h:.1f}%</b></div>
                 </div>""", unsafe_allow_html=True)
                 
-                st.info(f"💡 **AI Insight:** {data['note']} | **Lineup AVGs:** {g['away_name']} ({data['a']['l_avg']:.3f}) vs {g['home_name']} ({data['h']['l_avg']:.3f})")
+                st.info(f"💡 **AI Insight:** {data['note']} | **SLG:** {g['away_name']} ({data['a']['l_slg']:.3f}) vs {g['home_name']} ({data['h']['l_slg']:.3f})")
                 
                 st.subheader("🏟️ Starters")
                 c1, c2 = st.columns(2)
