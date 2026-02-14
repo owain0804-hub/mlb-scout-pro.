@@ -32,49 +32,30 @@ def get_detailed_data(game_id, game_info):
             return players + ["-"] * (9 - len(players))
 
         def get_strength_metrics(side):
-            # 1. Lineup Impact (WAR x OPS) - Amplifying the best hitters
             batters = box[side].get('batters', [])[:9]
-            l_score = 0
-            for b_id in batters:
-                adv = get_advanced_stats(b_id, "hitting")
-                # Squaring OPS to reward elite hitters more than average ones
-                l_score += (float(adv.get('ops', 0.720)) ** 2) + float(adv.get('war', 0.1))
+            l_score = sum([(float(get_advanced_stats(b, "hitting").get('ops', 0.720))**2.5) + float(get_advanced_stats(b, "hitting").get('war', 0.1)) for b in batters])
             
-            # 2. Elite Bullpen (Looking for 'Shutdown' arms)
             pitchers = box[side].get('pitchers', [])
-            bp_score = 0
-            if len(pitchers) > 1:
-                for p_id in pitchers[1:4]:
-                    p_adv = get_advanced_stats(p_id, "pitching")
-                    # Penalty for high FIP, reward for high WAR
-                    bp_score += (float(p_adv.get('war', 0.05)) * 5) - (float(p_adv.get('fip', 4.20)) / 10)
-
-            # 3. Starter 'Shutout' Potential
+            bp_score = sum([(float(get_advanced_stats(p, "pitching").get('war', 0.05))*8) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.5
+            
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
-            # Lower FIP is better; we invert it and square it for more "spread"
             fip = float(sp_data.get('fip', 4.20))
-            sp_score = (10 / (fip + 0.1)) ** 1.5 
+            sp_score = (12 / (fip + 0.1)) ** 2.0 
             
-            # 4. Momentum (Win %)
             rec = game_info.get(f'{side}_record', "1-1").split('-')
             win_pct = int(rec[0])/(int(rec[0])+int(rec[1])) if len(rec)==2 else 0.5
             
-            total_strength = (l_score * 2.5) + (bp_score * 4.0) + (sp_score * 1.2) + (win_pct * 25)
+            total_strength = (l_score * 3.0) + (bp_score * 5.0) + (sp_score * 2.0) + (win_pct * 40)
             return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "score": total_strength, "l_score": l_score, "bp_score": bp_score}
 
         a, h = get_strength_metrics('away'), get_strength_metrics('home')
+        power_h, power_a = h['score'] ** 3.5, a['score'] ** 3.5
+        prob_h = (power_h / (power_h + power_a)) + 0.03
         
-        # Pythagorean-style spread to prevent the "54% trap"
-        # Using an exponent of 3.0 pushes the favorites higher and dogs lower
-        power_h = h['score'] ** 3.0
-        power_a = a['score'] ** 3.0
-        prob_h = (power_h / (power_h + power_a)) + 0.03 # Slight home field nudge
-        
-        # Determine specific advantage for the Note
-        note = "Projected as a high-variance matchup."
-        if h['bp_score'] > a['bp_score'] + 1.0: note = f"Advantage: {game_info['home_name']} Bullpen depth."
-        elif a['l_score'] > h['l_score'] + 1.5: note = f"Advantage: {game_info['away_name']} Elite Lineup WAR."
+        note = "High-variance matchup."
+        if h['bp_score'] > a['bp_score'] + 1.5: note = f"Advantage: {game_info['home_name']} Bullpen."
+        elif a['l_score'] > h['l_score'] + 2.0: note = f"Advantage: {game_info['away_name']} Lineup WAR."
         
         return {"a_l": build_lineup('away'), "h_l": build_lineup('home'), "prob_h": max(0.05, min(0.95, prob_h)), "box": box, "a_sp": a, "h_sp": h, "note": note}
     except: return None
@@ -96,13 +77,27 @@ for g in games:
                 </div>""", unsafe_allow_html=True)
                 st.info(f"💡 **AI Insight:** {data['note']}")
                 
-                st.subheader("🏟️ Matchup Starters")
+                st.subheader("🏟️ Starters")
                 c1, c2 = st.columns(2)
                 for col, team, key in zip([c1, c2], [g['away_name'], g['home_name']], ['a_sp', 'h_sp']):
                     s = data[key]
                     col.write(f"**{s['name']}**")
                     col.caption(f"ERA: {s['stats'].get('era','-.--')} | FIP: {s['stats'].get('fip','-.--')}")
                 
-                st.subheader("📋 Official Lineups")
+                st.subheader("📋 Lineups")
                 st.table(pd.DataFrame({g['away_name']: data['a_l'], g['home_name']: data['h_l']}))
-            
+
+                st.subheader("📝 Scoreboard")
+                b, status = data['box'], g.get('status', '')
+                aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
+                
+                df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]})
+                
+                def highlight_winner(row):
+                    if "Final" in status:
+                        winner = g['away_name'] if aw_r > hm_r else g['home_name']
+                        if row.Team == winner:
+                            return ['background-color: #1b5e20; color: white'] * len(row)
+                    return [''] * len(row)
+
+                st.table(df.style.apply(highlight_winner, axis=1))
