@@ -1,0 +1,4 @@
+streamlit
+MLB-StatsAPI
+pandas
+streamlit-autorefresh
