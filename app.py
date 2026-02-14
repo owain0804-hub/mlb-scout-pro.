@@ -44,37 +44,35 @@ def get_detailed_data(game_id, game_info):
             return players + ["-"] * (9 - len(players))
 
         def get_strength_metrics(side, team_name):
-            # 1. Season Performance (45% Weight)
             t_info = get_team_info(team_name)
             
-            # 2. Daily Personnel Adjustments
             batters = box[side].get('batters', [])[:9]
             l_score = sum([float(get_advanced_stats(b, "hitting").get('war', 0.1)) for b in batters])
             
-            # BULLPEN BOOST: Increased multiplier for Relief WAR
             pitchers = box[side].get('pitchers', [])
             bp_score = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
-            fip = float(sp_data.get('fip', 4.20))
             
-            # REVISED WEIGHTING: 45% Standings, 12% Bullpen (up from 6%), rest for Lineup/Starter
-            adj_wpct = (t_info['wpct'] * 0.45) + (l_score * 0.025) + (bp_score * 0.12) + ((4.2/fip) * 0.15)
+            # ERA vs FIP Balance:
+            # We take the average of ERA and FIP to ensure "Run Suppression" is valued as much as "Pure Skill"
+            p_era = float(sp_data.get('era', 4.00))
+            p_fip = float(sp_data.get('fip', 4.20))
+            pitching_skill = (p_era + p_fip) / 2
+            
+            # WEIGHTING: 45% Standings, 15% Starter (heavily influenced by ERA/FIP), 12% Bullpen, 28% Lineup
+            adj_wpct = (t_info['wpct'] * 0.45) + (l_score * 0.028) + (bp_score * 0.12) + ((4.1/pitching_skill) * 0.15)
             
             return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": max(0.1, min(0.9, adj_wpct)), "div_id": t_info['div_id']}
 
         a, h = get_strength_metrics('away', game_info['away_name']), get_strength_metrics('home', game_info['home_name'])
         
-        # Log-5 Probability Formula
         pa, pb = a['wpct'], h['wpct']
         prob_h = (pb - (pa * pb)) / (pa + pb - (2 * pa * pb))
-        prob_h += 0.04 # Home Field Advantage
+        prob_h += 0.04 # Home Field
         
-        if a['div_id'] == h['div_id'] and a['div_id'] is not None:
-            note = "Divisional battle."
-        else:
-            note = "Inter-divisional matchup."
+        note = "Divisional battle." if a['div_id'] == h['div_id'] and a['div_id'] is not None else "Inter-divisional matchup."
             
         return {"a_l": build_lineup('away'), "h_l": build_lineup('home'), "prob_h": max(0.1, min(0.9, prob_h)), "box": box, "a_sp": a, "h_sp": h, "note": note}
     except: return None
