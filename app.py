@@ -21,7 +21,6 @@ def get_team_info(team_name):
         for div_id, division in standings.items():
             for team in division['teams']:
                 if team['name'] == team_name:
-                    # Return win percentage and rank
                     w, l = int(team.get('w', 1)), int(team.get('l', 1))
                     return {"div_id": div_id, "rank": int(team.get('div_rank', 5)), "wpct": w/(w+l)}
         return {"div_id": None, "rank": 5, "wpct": 0.500}
@@ -45,40 +44,41 @@ def get_detailed_data(game_id, game_info):
             return players + ["-"] * (9 - len(players))
 
         def get_strength_metrics(side, team_name):
-            # 1. Lineup & Bullpen (Weighted for 2026 Season Consistency)
+            # 1. Season Performance (The Anchor)
+            t_info = get_team_info(team_name)
+            
+            # 2. Daily Personnel Adjustments
             batters = box[side].get('batters', [])[:9]
             l_score = sum([float(get_advanced_stats(b, "hitting").get('war', 0.1)) for b in batters])
             
             pitchers = box[side].get('pitchers', [])
             bp_score = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
-            # 2. Pitcher Skill (FIP is more predictive than ERA)
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             fip = float(sp_data.get('fip', 4.20))
             
-            # 3. Team Standings & Win %
-            t_info = get_team_info(team_name)
+            # WEIGHTING: 45% Standings (wpct), 55% Personnel (WAR/FIP)
+            # Personnel is split: 25% Lineup, 15% Bullpen, 15% Starter
+            adj_wpct = (t_info['wpct'] * 0.45) + (l_score * 0.025) + (bp_score * 0.06) + ((4.2/fip) * 0.15)
             
-            # Combine into a single "True Win %" for the Log-5 Formula
-            # Formula: (Team Win % + Lineup/Pitcher Adjustment)
-            adj_wpct = (t_info['wpct'] * 0.4) + (l_score * 0.02) + (bp_score * 0.05) + ((4.2/fip) * 0.1)
             return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": max(0.1, min(0.9, adj_wpct)), "div_id": t_info['div_id']}
 
         a, h = get_strength_metrics('away', game_info['away_name']), get_strength_metrics('home', game_info['home_name'])
         
-        # LOG-5 Formula: P = (A - A*B) / (A + B - 2*A*B)
-        # This prevents the extreme 90% spikes unless one team is truly dominant.
+        # Log-5 Probability Formula
         pa, pb = a['wpct'], h['wpct']
         prob_h = (pb - (pa * pb)) / (pa + pb - (2 * pa * pb))
-        prob_h += 0.04 # Standard Home Field Nudge
+        prob_h += 0.04 # Home Field Advantage
         
-        note = "Divisional battle." if a['div_id'] == h['div_id'] and a['div_id'] is not None else "Inter-divisional matchup."
+        if a['div_id'] == h['div_id'] and a['div_id'] is not None:
+            note = "Divisional battle."
+        else:
+            note = "Inter-divisional matchup."
             
         return {"a_l": build_lineup('away'), "h_l": build_lineup('home'), "prob_h": max(0.1, min(0.9, prob_h)), "box": box, "a_sp": a, "h_sp": h, "note": note}
     except: return None
 
-# UI Rendering starts here (Rest of your app remains the same)
 st.title("⚾ MLB Intelligence: Pro")
 u_date = st.text_input("Gameday Date", value=datetime.now().strftime("%m/%d/%Y"))
 games = statsapi.schedule(date=u_date)
@@ -96,7 +96,13 @@ for g in games:
                 </div>""", unsafe_allow_html=True)
                 st.info(f"💡 **AI Insight:** {data['note']}")
                 
-                # ... [Starters and Lineups sections same as before] ...
+                st.subheader("🏟️ Starters")
+                c1, c2 = st.columns(2)
+                for col, team, key in zip([c1, c2], [g['away_name'], g['home_name']], ['a_sp', 'h_sp']):
+                    s = data[key]
+                    col.write(f"**{s['name']}**")
+                    col.caption(f"ERA: {s['stats'].get('era','-.--')} | FIP: {s['stats'].get('fip','-.--')}")
+                
                 st.subheader("📋 Lineups")
                 st.table(pd.DataFrame({g['away_name']: data['a_l'], g['home_name']: data['h_l']}))
 
@@ -112,4 +118,4 @@ for g in games:
                             return ['background-color: #1b5e20; color: white'] * len(row)
                     return [''] * len(row)
                 st.table(df.style.apply(highlight_winner, axis=1))
-        
+                      
