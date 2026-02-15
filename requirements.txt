@@ -2,3 +2,6 @@ streamlit
 MLB-StatsAPI
 pandas
 streamlit-autorefresh
+mlb-statsapi
+pandas
+streamlit-authenticator
