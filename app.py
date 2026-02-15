@@ -45,7 +45,6 @@ with st.sidebar:
         reset_weights()
         st.rerun()
 
-    # Probability Sliders with your exact percentages as defaults
     w_std = st.slider("Standings Weight %", 0, 100, key="w_std", value=40)
     w_avg = st.slider("Lineup AVG Weight %", 0, 100, key="w_avg", value=15)
     w_slg = st.slider("Lineup SLG Weight %", 0, 100, key="w_slg", value=20)
@@ -54,11 +53,13 @@ with st.sidebar:
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
-def get_advanced_stats(player_id, group):
+def get_bullpen_era(team_id):
     try:
-        data = statsapi.player_stat_data(player_id, group=group, type="season")
-        return data['stats'][0]['stats'] if data.get('stats') else {}
-    except: return {}
+        # Fetch situational relief pitching stats for the current year
+        year = datetime.now().year
+        stats = statsapi.get("team_stats", {"teamId": team_id, "season": year, "group": "pitching", "stats": "statSplits", "sitCodes": "rp"})
+        return float(stats['stats'][0]['splits'][0]['stat'].get('era', 4.25))
+    except: return 4.25
 
 @st.cache_data(ttl=3600)
 def get_team_wpct(team_id):
@@ -75,31 +76,25 @@ def get_detailed_data(game_id, g_info):
     try:
         box = statsapi.boxscore_data(game_id)
         def fetch_metrics(side, tid):
-            # Batter Stats
             batters = box[side].get('batters', [])[:9]
             l_names, avgs, slgs = [], [], []
             for pid in batters:
                 p = box[side]['players'][f"ID{pid}"]
+                season = statsapi.player_stat_data(pid, group="hitting", type="season")
+                s = season['stats'][0]['stats'] if season.get('stats') else {}
                 l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
-                season = get_advanced_stats(pid, "hitting")
-                avgs.append(float(str(season.get('avg', '.250')).replace('.','0.')))
-                slgs.append(float(str(season.get('slg', '.400')).replace('.','0.')))
+                avgs.append(float(str(s.get('avg', '.250')).replace('.','0.')))
+                slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')))
             
-            # Pitcher Stats
             sp_id = box[side].get('pitchers', [None])[0]
-            sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
-            p_era = float(sp_stat.get('era', 4.10))
+            sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season") if sp_id else {}
+            p_era = float(sp_stat['stats'][0]['stats'].get('era', 4.10)) if sp_stat.get('stats') else 4.10
             
-            # Team/Bullpen Stats
             wpct = get_team_wpct(tid)
-            # Bullpen ERA proxy (Average of remaining pitchers in boxscore or league avg)
-            bp_era = 4.25 # Baseline league bullpen avg
+            bp_era = get_bullpen_era(tid)
             
-            # Scoring Logic based on your 40/15/20/13/12 weights
-            score = (wpct * (w_std/100)) + \
-                    (sum(avgs)/9 * 4 * (w_avg/100)) + \
-                    (sum(slgs)/9 * 2.5 * (w_slg/100)) + \
-                    ((4.1/p_era) * (w_era/100)) + \
+            score = (wpct * (w_std/100)) + (sum(avgs)/9 * 4 * (w_avg/100)) + \
+                    (sum(slgs)/9 * 2.5 * (w_slg/100)) + ((4.1/p_era) * (w_era/100)) + \
                     ((4.1/bp_era) * (w_bp/100))
             
             return {"names": l_names, "p_name": box[side]['players'].get(f"ID{sp_id}", {}).get('person', {}).get('fullName', 'TBD'), 
@@ -143,7 +138,7 @@ for g in sorted_games:
                     with col:
                         st.markdown(f"**{t_name} Pitching**")
                         st.markdown(f"""<div class="pitcher-box"><b>SP: {d['p_name']}</b> (ERA: {d['p_era']})<br>
-                        <small>Bullpen Strength: {d['bp_era']} ERA</small></div>""", unsafe_allow_html=True)
+                        <small>Bullpen Season ERA: {d['bp_era']:.2f}</small></div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
 
                 if st.button("📊 Show Box Score", key=f"boxscore_{gid}"):
@@ -156,4 +151,4 @@ for g in sorted_games:
                     })
                     st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
-                    
+    
