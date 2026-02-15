@@ -34,6 +34,10 @@ with st.sidebar:
     
     st.divider()
     st.header("⚙️ Model Tuning")
+    
+    # NEW: Sensitivity Toggle
+    sensitivity = st.slider("Stat Sensitivity (Impact Multiplier)", 1.0, 3.0, value=1.0, step=0.1, help="Higher values make stat differences create larger gaps in win %")
+    
     if st.button("🔄 Reset to Default"):
         st.session_state["w_std"] = 40
         st.session_state["w_era"] = 15
@@ -109,13 +113,19 @@ def get_detailed_data(game_id, g_info, selected_year):
                 except: p_era = 4.10
             
             _, wpct = get_team_info(tid, selected_year)
+            # Apply Sensitivity to the individual scores
             score = (wpct * (w_std/100)) + ((4.1/max(0.5, p_era)) * (w_era/100)) + \
                     (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
             return {"names": l_names, "p_name": p_name, "p_era": p_era, "score": score}
 
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
-        prob_h = (h_data['score'] / max(0.1, (a_data['score'] + h_data['score']))) + 0.04
+        
+        # SENSITIVITY CALCULATION
+        diff = (h_data['score'] - a_data['score']) * sensitivity
+        avg_score = (h_data['score'] + a_data['score']) / 2
+        prob_h = 0.5 + (diff / avg_score) + 0.04
+        
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
 
@@ -124,18 +134,9 @@ st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
 
-# SEASON PHASE LOGIC (2026 Specific)
-# Spring Training: Feb 20 - March 24
-# Regular Season: March 25 - Sept 27
-st_start = datetime(2026, 2, 20).date()
-reg_start = datetime(2026, 3, 25).date()
-
-if u_date < st_start:
-    phase_label = f"{selected_year} Pre-Season"
-elif st_start <= u_date < reg_start:
-    phase_label = f"{selected_year} Spring Training"
-else:
-    phase_label = f"{selected_year} Regular Season"
+# 2026 Calendar Logic
+st_start, reg_start = datetime(2026, 2, 20).date(), datetime(2026, 3, 25).date()
+phase_label = f"{selected_year} Spring Training" if st_start <= u_date < reg_start else f"{selected_year} Regular Season"
 
 games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 sorted_games = sorted(games, key=lambda x: (x.get('away_name') != fav_team and x.get('home_name') != fav_team))
@@ -153,7 +154,7 @@ for g in sorted_games:
         with cols[1]: 
             fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
             st.markdown(f"### {g.get('away_name')} ({rec_a}) @ {g.get('home_name')} ({rec_h}) {fav_html}", unsafe_allow_html=True)
-            st.caption(f"Status: {g.get('status')} | {phase_label}") # Dynamic Phase Display
+            st.caption(f"Status: {g.get('status')} | {phase_label}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -171,7 +172,13 @@ for g in sorted_games:
                         st.markdown(f"**{t_name} Starter**")
                         st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>ERA: {d['p_era'] if d['p_name'] != "TBD Pitcher" else "TBD"}</div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
-            else:
-                st.error("Analyze error: Data likely unavailable for this game type.")
+                
+                # BOXSCORE BUTTON
+                if g.get('status') in ["Final", "Game Over"]:
+                    if st.button("📊 View Box Score", key=f"box_{gid}"):
+                        b = data['box']
+                        aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
+                        df_box = pd.DataFrame({"Team": [g.get('away_name'), g.get('home_name')], "Runs": [aw_r, hm_r], "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]})
+                        st.dataframe(df_box, use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
         
