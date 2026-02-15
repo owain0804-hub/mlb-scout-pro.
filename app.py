@@ -40,15 +40,15 @@ with st.sidebar:
     fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list)
     
     st.divider()
-    st.header("⚙️ Model Tuning")
+    st.header("probability Tuning")
     st.caption("Adjust how much each stat affects the win %")
     
-    if st.button("🔄 Reset to Default"):
+    if st.button("Reset to Default"):
         reset_weights()
         st.rerun()
 
     # Probability Sliders (using session_state keys for resetting)
-    w_era = st.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=40)
+    w_era = st.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=30)
     w_avg = st.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=30)
     w_slg = st.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=40)
 
