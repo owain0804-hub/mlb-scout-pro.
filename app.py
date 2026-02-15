@@ -25,10 +25,9 @@ if "active_game_id" not in st.session_state:
 # --- RESET LOGIC ---
 def reset_weights():
     st.session_state["w_std"] = 40
-    st.session_state["w_avg"] = 15
-    st.session_state["w_slg"] = 20
-    st.session_state["w_era"] = 13
-    st.session_state["w_bp"] = 12
+    st.session_state["w_era"] = 15
+    st.session_state["w_avg"] = 20
+    st.session_state["w_slg"] = 25
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -46,20 +45,18 @@ with st.sidebar:
         st.rerun()
 
     w_std = st.slider("Standings Weight %", 0, 100, key="w_std", value=40)
-    w_avg = st.slider("Lineup AVG Weight %", 0, 100, key="w_avg", value=15)
-    w_slg = st.slider("Lineup SLG Weight %", 0, 100, key="w_slg", value=20)
-    w_era = st.slider("Starter ERA Weight %", 0, 100, key="w_era", value=13)
-    w_bp = st.slider("Bullpen ERA Weight %", 0, 100, key="w_bp", value=12)
+    w_era = st.slider("Starter ERA Weight %", 0, 100, key="w_era", value=15)
+    w_avg = st.slider("Lineup AVG Weight %", 0, 100, key="w_avg", value=20)
+    w_slg = st.slider("Lineup SLG Weight %", 0, 100, key="w_slg", value=25)
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
 def get_bullpen_era(team_id):
     try:
-        # Fetch situational relief pitching stats for the current year
-        year = datetime.now().year
-        stats = statsapi.get("team_stats", {"teamId": team_id, "season": year, "group": "pitching", "stats": "statSplits", "sitCodes": "rp"})
-        return float(stats['stats'][0]['splits'][0]['stat'].get('era', 4.25))
-    except: return 4.25
+        # Pulls actual season bullpen ERA using reliever (rp) split code
+        stats = statsapi.get("team_stats", {"teamId": team_id, "season": 2026, "group": "pitching", "stats": "statSplits", "sitCodes": "rp"})
+        return float(stats['stats'][0]['splits'][0]['stat'].get('era', 4.10))
+    except: return 4.10
 
 @st.cache_data(ttl=3600)
 def get_team_wpct(team_id):
@@ -68,7 +65,7 @@ def get_team_wpct(team_id):
         for div in standings.values():
             for t in div['teams']:
                 if t['team_id'] == team_id:
-                    return int(t.get('w', 1)) / (int(t.get('w', 1)) + int(t.get('l', 1)))
+                    return int(t.get('w', 1)) / (max(1, int(t.get('w', 1)) + int(t.get('l', 1))))
         return 0.500
     except: return 0.500
 
@@ -80,8 +77,8 @@ def get_detailed_data(game_id, g_info):
             l_names, avgs, slgs = [], [], []
             for pid in batters:
                 p = box[side]['players'][f"ID{pid}"]
-                season = statsapi.player_stat_data(pid, group="hitting", type="season")
-                s = season['stats'][0]['stats'] if season.get('stats') else {}
+                s_data = statsapi.player_stat_data(pid, group="hitting", type="season")
+                s = s_data['stats'][0]['stats'] if s_data.get('stats') else {}
                 l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
                 avgs.append(float(str(s.get('avg', '.250')).replace('.','0.')))
                 slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')))
@@ -93,9 +90,9 @@ def get_detailed_data(game_id, g_info):
             wpct = get_team_wpct(tid)
             bp_era = get_bullpen_era(tid)
             
-            score = (wpct * (w_std/100)) + (sum(avgs)/9 * 4 * (w_avg/100)) + \
-                    (sum(slgs)/9 * 2.5 * (w_slg/100)) + ((4.1/p_era) * (w_era/100)) + \
-                    ((4.1/bp_era) * (w_bp/100))
+            # Recalculated Prediction Weights (Standings 40, Starter 15, AVG 20, SLG 25)
+            score = (wpct * (w_std/100)) + ((4.1/p_era) * (w_era/100)) + \
+                    (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
             
             return {"names": l_names, "p_name": box[side]['players'].get(f"ID{sp_id}", {}).get('person', {}).get('fullName', 'TBD'), 
                     "p_era": p_era, "bp_era": bp_era, "score": score}
@@ -138,17 +135,7 @@ for g in sorted_games:
                     with col:
                         st.markdown(f"**{t_name} Pitching**")
                         st.markdown(f"""<div class="pitcher-box"><b>SP: {d['p_name']}</b> (ERA: {d['p_era']})<br>
-                        <small>Bullpen Season ERA: {d['bp_era']:.2f}</small></div>""", unsafe_allow_html=True)
+                        <small>Bullpen ERA: {d['bp_era']:.2f}</small></div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
-
-                if st.button("📊 Show Box Score", key=f"boxscore_{gid}"):
-                    b = data['box']
-                    aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
-                    df_box = pd.DataFrame({
-                        "Team": [g['away_name'], g['home_name']], "Runs": [aw_r, hm_r],
-                        "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)],
-                        "Errors": [b['away'].get('fielding', {}).get('errors', 0), b['home'].get('fielding', {}).get('errors', 0)]
-                    })
-                    st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
-    
+        
