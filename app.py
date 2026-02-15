@@ -23,12 +23,6 @@ st.markdown("""
 if "active_game_id" not in st.session_state:
     st.session_state.active_game_id = None
 
-def reset_weights():
-    st.session_state["w_std"] = 40
-    st.session_state["w_era"] = 15
-    st.session_state["w_avg"] = 20
-    st.session_state["w_slg"] = 25
-
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("⚾ Settings")
@@ -41,7 +35,10 @@ with st.sidebar:
     st.divider()
     st.header("⚙️ Model Tuning")
     if st.button("🔄 Reset to Default"):
-        reset_weights()
+        st.session_state["w_std"] = 40
+        st.session_state["w_era"] = 15
+        st.session_state["w_avg"] = 20
+        st.session_state["w_slg"] = 25
         st.rerun()
 
     w_std = st.slider("Standings Weight %", 0, 100, key="w_std", value=40)
@@ -80,8 +77,6 @@ def get_detailed_data(game_id, g_info, selected_year):
                 for pid in batters[:9]:
                     p = players.get(f"ID{pid}", {})
                     p_name = p.get('person', {}).get('fullName', "TBD Player")
-                    
-                    # Safe stat fetching
                     try:
                         s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
                         stats_list = s_data.get('stats', [])
@@ -91,21 +86,14 @@ def get_detailed_data(game_id, g_info, selected_year):
                             stats_list = s_data.get('stats', [])
                             s = stats_list[0].get('stats', {}) if stats_list else {}
                     except: s = {}
-                    
-                    # Safe hits/at-bats for display
                     b_stats = p.get('stats', {}).get('batting', {})
-                    hits = b_stats.get('hits', 0)
-                    abs_val = b_stats.get('atBats', 0)
-                    
-                    l_names.append(f"{p_name} ({hits}/{abs_val})")
+                    l_names.append(f"{p_name} ({b_stats.get('hits', 0)}/{b_stats.get('atBats', 0)})")
                     avgs.append(float(str(s.get('avg', '.250')).replace('.','0.')) if s.get('avg') else 0.250)
                     slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')) if s.get('slg') else 0.400)
 
-            # Safe Pitcher fetching
             pitchers_list = side_data.get('pitchers', [])
             sp_id = pitchers_list[0] if pitchers_list else None
             p_name, p_era = "TBD Pitcher", 4.10
-            
             if sp_id:
                 p_info = players.get(f"ID{sp_id}", {})
                 p_name = p_info.get('person', {}).get('fullName', "TBD Pitcher")
@@ -129,13 +117,26 @@ def get_detailed_data(game_id, g_info, selected_year):
         h_data = fetch_metrics('home', g_info['home_id'])
         prob_h = (h_data['score'] / max(0.1, (a_data['score'] + h_data['score']))) + 0.04
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
-    except Exception as e:
-        return None
+    except: return None
 
 # --- MAIN UI ---
 st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
+
+# SEASON PHASE LOGIC (2026 Specific)
+# Spring Training: Feb 20 - March 24
+# Regular Season: March 25 - Sept 27
+st_start = datetime(2026, 2, 20).date()
+reg_start = datetime(2026, 3, 25).date()
+
+if u_date < st_start:
+    phase_label = f"{selected_year} Pre-Season"
+elif st_start <= u_date < reg_start:
+    phase_label = f"{selected_year} Spring Training"
+else:
+    phase_label = f"{selected_year} Regular Season"
+
 games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 sorted_games = sorted(games, key=lambda x: (x.get('away_name') != fav_team and x.get('home_name') != fav_team))
 
@@ -152,7 +153,7 @@ for g in sorted_games:
         with cols[1]: 
             fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
             st.markdown(f"### {g.get('away_name')} ({rec_a}) @ {g.get('home_name')} ({rec_h}) {fav_html}", unsafe_allow_html=True)
-            st.caption(f"Status: {g.get('status')} | Year: {selected_year}")
+            st.caption(f"Status: {g.get('status')} | {phase_label}") # Dynamic Phase Display
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -165,12 +166,12 @@ for g in sorted_games:
                 st.progress(p_h, text=f"{g.get('home_name')} {p_h*100:.1f}% | {g.get('away_name')} {(1-p_h)*100:.1f}%")
 
                 c1, c2 = st.columns(2)
-                for col, side, d, t_name in [(c1, 'Away', data['a'], g.get('away_name')), (c2, 'Home', data['h'], g.get('home_name'))]:
+                for col, d, t_name in [(c1, data['a'], g.get('away_name')), (c2, data['h'], g.get('home_name'))]:
                     with col:
                         st.markdown(f"**{t_name} Starter**")
                         st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>ERA: {d['p_era'] if d['p_name'] != "TBD Pitcher" else "TBD"}</div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
             else:
-                st.error("Stats not available for this matchup (likely exhibition or non-MLB).")
+                st.error("Analyze error: Data likely unavailable for this game type.")
         st.markdown("</div>", unsafe_allow_html=True)
-                                                            
+        
