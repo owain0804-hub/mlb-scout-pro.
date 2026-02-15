@@ -54,19 +54,38 @@ with st.sidebar:
 @st.cache_data(ttl=3600)
 def get_team_info(team_id, year):
     try:
+        # Fetch detailed standings to get Home/Away splits
         standings = statsapi.standings_data(leagueId="103,104", season=year) or statsapi.standings_data(leagueId="103,104", season=year-1)
         for div in standings.values():
             for t in div.get('teams', []):
                 if t.get('team_id') == team_id:
                     w, l = t.get('w', 0), t.get('l', 0)
-                    return f"{w}-{l}", (int(w) / max(1, int(w)+int(l)))
-        return "0-0", 0.500
-    except: return "0-0", 0.500
+                    h_rec = t.get('home', "0-0").split('-')
+                    a_rec = t.get('away', "0-0").split('-')
+                    
+                    h_pct = int(h_rec[0]) / max(1, int(h_rec[0]) + int(h_rec[1]))
+                    a_pct = int(a_rec[0]) / max(1, int(a_rec[0]) + int(a_rec[1]))
+                    
+                    return {
+                        "record": f"{w}-{l}", 
+                        "wpct": (int(w) / max(1, int(w)+int(l))),
+                        "h_pct": h_pct,
+                        "a_pct": a_pct,
+                        "h_str": t.get('home', "0-0"),
+                        "a_str": t.get('away', "0-0")
+                    }
+        return {"record": "0-0", "wpct": 0.5, "h_pct": 0.5, "a_pct": 0.5, "h_str": "0-0", "a_str": "0-0"}
+    except: return {"record": "0-0", "wpct": 0.5, "h_pct": 0.5, "a_pct": 0.5, "h_str": "0-0", "a_str": "0-0"}
 
 def get_detailed_data(game_id, g_info, selected_year):
     try:
         box = statsapi.boxscore_data(game_id)
-        def fetch_metrics(side, tid):
+        
+        # Get Team Splits
+        away_info = get_team_info(g_info['away_id'], selected_year)
+        home_info = get_team_info(g_info['home_id'], selected_year)
+
+        def fetch_metrics(side, tid, team_info, is_home):
             side_data = box.get(side, {})
             players, batters = side_data.get('players', {}), side_data.get('batters', [])
             l_rows, avgs, slgs = [], [], []
@@ -108,21 +127,24 @@ def get_detailed_data(game_id, g_info, selected_year):
                     p_era = float(s_p.get('era', 4.10))
                 except: p_era = 4.10
             
-            _, wpct = get_team_info(tid, selected_year)
-            std_part = wpct * (w_std/100)
+            # Use appropriate split
+            split_pct = team_info['h_pct'] if is_home else team_info['a_pct']
+            
+            std_part = team_info['wpct'] * (w_std/100)
+            split_part = split_pct * 0.10 # Add fixed 10% weight for splits
             era_part = (4.1/max(0.5, p_era)) * (w_era/100)
             avg_part = (sum(avgs)/9 * 4 * (w_avg/100))
             slg_part = (sum(slgs)/9 * 2.5 * (w_slg/100))
             
             return {
                 "lines": l_rows, "p_name": p_name, "p_era": p_era, 
-                "total": std_part + era_part + avg_part + slg_part, 
-                "std": std_part, "era_val": era_part, "avg_val": avg_part, "slg_val": slg_part,
-                "team_avg": sum(avgs)/9, "team_slg": sum(slgs)/9
+                "total": std_part + era_part + avg_part + slg_part + split_part, 
+                "std": std_part, "era_val": era_part, "avg_val": avg_part, "slg_val": slg_part, "split_val": split_part,
+                "team_avg": sum(avgs)/9, "team_slg": sum(slgs)/9, "split_str": team_info['h_str'] if is_home else team_info['a_str']
             }
 
-        a_data = fetch_metrics('away', g_info['away_id'])
-        h_data = fetch_metrics('home', g_info['home_id'])
+        a_data = fetch_metrics('away', g_info['away_id'], away_info, False)
+        h_data = fetch_metrics('home', g_info['home_id'], home_info, True)
         
         avg_score = (h_data['total'] + a_data['total']) / 2
         diff = (h_data['total'] - a_data['total']) * sensitivity
@@ -132,7 +154,8 @@ def get_detailed_data(game_id, g_info, selected_year):
             "Standings": (h_data['std'] - a_data['std']) * sensitivity * 10,
             "ERA Matchup": (h_data['era_val'] - a_data['era_val']) * sensitivity * 10,
             "Lineup AVG": (h_data['avg_val'] - a_data['avg_val']) * sensitivity * 10,
-            "Lineup SLG": (h_data['slg_val'] - a_data['slg_val']) * sensitivity * 10
+            "Lineup SLG": (h_data['slg_val'] - a_data['slg_val']) * sensitivity * 10,
+            "Venue Splits": (h_data['split_val'] - a_data['split_val']) * sensitivity * 10
         }
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "drivers": drivers, "box": box}
     except: return None
@@ -148,15 +171,15 @@ sorted_games = sorted(games, key=lambda x: (x.get('away_name') != fav and x.get(
 
 for g in sorted_games:
     gid = g['game_id']
-    rec_a, _ = get_team_info(g['away_id'], selected_year)
-    rec_h, _ = get_team_info(g['home_id'], selected_year)
+    away_info = get_team_info(g['away_id'], selected_year)
+    home_info = get_team_info(g['home_id'], selected_year)
 
     with st.container():
         st.markdown(f'<div class="matchup-card">', unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1, 4, 1.5])
         with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
         with c2:
-            st.markdown(f"**{g.get('away_name')} ({rec_a}) @ {g.get('home_name')} ({rec_h})**")
+            st.markdown(f"**{g.get('away_name')} ({away_info['record']}) @ {g.get('home_name')} ({home_info['record']})**")
             st.caption(f"{g.get('status')} | {selected_year} Season")
         with c3:
             if st.button("Analyze Matchup", key=f"btn_{gid}"): st.session_state.active_game_id = gid
@@ -172,21 +195,20 @@ for g in sorted_games:
                 
                 st.markdown(f"""<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({win_pct*100:.1f}%) <span class="confidence-badge" style="background:{conf_color}; color:#000;">{conf} Confidence</span></div>""", unsafe_allow_html=True)
                 
-                # --- ENHANCED DRIVERS ---
                 with st.expander("📊 Why this prediction? (Detailed Drivers)"):
                     st.write(f"Advantage breakdown for **{winner}**:")
                     d, mult = data['drivers'], (1 if p_h > 0.5 else -1)
                     
                     st.markdown(f"* Standings Edge: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
                     
+                    st.markdown(f"* Venue Splits (H/A): <span class='driver-val'>{'+' if d['Venue Splits']*mult > 0 else ''}{d['Venue Splits']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='driver-detail'>Home Split: {data['h']['split_str']} vs Road Split: {data['a']['split_str']}</div>", unsafe_allow_html=True)
+
                     st.markdown(f"* Pitching ERA Impact: <span class='driver-val'>{'+' if d['ERA Matchup']*mult > 0 else ''}{d['ERA Matchup']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='driver-detail'>Compare: {data['h']['p_name']} ({data['h']['p_era']}) vs {data['a']['p_name']} ({data['a']['p_era']})</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='driver-detail'>{data['h']['p_name']} ({data['h']['p_era']}) vs {data['a']['p_name']} ({data['a']['p_era']})</div>", unsafe_allow_html=True)
                     
                     st.markdown(f"* Lineup AVG (Consistency): <span class='driver-val'>{'+' if d['Lineup AVG']*mult > 0 else ''}{d['Lineup AVG']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='driver-detail'>Team Avgs: {data['h']['team_avg']:.3f} (H) vs {data['a']['team_avg']:.3f} (A)</div>", unsafe_allow_html=True)
-
                     st.markdown(f"* Lineup SLG (Power): <span class='driver-val'>{'+' if d['Lineup SLG']*mult > 0 else ''}{d['Lineup SLG']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='driver-detail'>Team Slugging: {data['h']['team_slg']:.3f} (H) vs {data['a']['team_slg']:.3f} (A)</div>", unsafe_allow_html=True)
 
                 l_col1, l_col2 = st.columns(2)
                 for col, d_key, t_name in [(l_col1, 'a', g['away_name']), (l_col2, 'h', g['home_name'])]:
@@ -195,26 +217,23 @@ for g in sorted_games:
                         st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era'] if data[d_key]['p_name'] != 'TBD Pitcher' else 'TBD'})</div>", unsafe_allow_html=True)
                         st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
                 
-                # --- FIXED BOX SCORE ---
                 if g.get('status') in ["Final", "Game Over"]:
                     st.divider()
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
                         try:
                             aw_stats, hm_stats = data['box']['away'].get('teamStats', {}), data['box']['home'].get('teamStats', {})
                             aw_r, hm_r = aw_stats.get('batting', {}).get('runs', 0), hm_stats.get('batting', {}).get('runs', 0)
-                            
                             df_bs = pd.DataFrame({
                                 "Team": [g['away_name'], g['home_name']],
                                 "Runs": [aw_r, hm_r],
                                 "Hits": [aw_stats.get('batting', {}).get('hits', 0), hm_stats.get('batting', {}).get('hits', 0)],
                                 "Errors": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
                             })
-                            
                             def highlight_winner(row):
                                 is_win = row['Runs'] == max(aw_r, hm_r)
                                 return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
-                            
                             st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
                         except Exception as e: st.error(f"Could not load box score: {e}")
             else: st.info("Analysis unavailable for non-MLB matchups.")
         st.markdown('</div>', unsafe_allow_html=True)
+                            
