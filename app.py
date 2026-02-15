@@ -31,7 +31,6 @@ with st.sidebar:
     st.title("⚾ Model Intelligence")
     preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=0)
     
-    # Weight logic
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -119,7 +118,7 @@ def get_detailed_data(game_id, g_info, selected_year):
         
         avg_score = (h_data['total'] + a_data['total']) / 2
         diff = (h_data['total'] - a_data['total']) * sensitivity
-        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03 # Home Adv
+        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03
         
         drivers = {
             "Standings": (h_data['std'] - a_data['std']) * sensitivity * 10,
@@ -178,26 +177,32 @@ for g in sorted_games:
                         st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era'] if data[d_key]['p_name'] != 'TBD Pitcher' else 'TBD'})</div>", unsafe_allow_html=True)
                         st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
                 
-                # BOX SCORE FEATURE
+                # --- FIXED BOX SCORE ---
                 if g.get('status') in ["Final", "Game Over"]:
                     st.divider()
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
-                        aw_r = data['box']['away']['teamStats']['batting'].get('runs', 0)
-                        hm_r = data['box']['home']['teamStats']['batting'].get('runs', 0)
-                        
-                        df_bs = pd.DataFrame({
-                            "Team": [g['away_name'], g['home_name']],
-                            "Runs": [aw_r, hm_r],
-                            "Hits": [data['box']['away']['teamStats']['batting'].get('hits', 0), data['box']['home']['teamStats']['batting'].get('hits', 0)],
-                            "Errors": [data['box']['away']['teamStats']['fielding'].get('errors', 0), data['box']['home']['teamStats']['fielding'].get('errors', 0)]
-                        })
-                        
-                        # Style: Highlight the row with more runs
-                        def highlight_winner(row):
-                            is_win = row['Runs'] == max(aw_r, hm_r)
-                            return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
-                        
-                        st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
+                        try:
+                            # Safe stat retrieval using nested .get() to prevent KeyErrors
+                            aw_stats = data['box']['away'].get('teamStats', {})
+                            hm_stats = data['box']['home'].get('teamStats', {})
+                            
+                            aw_r = aw_stats.get('batting', {}).get('runs', 0)
+                            hm_r = hm_stats.get('batting', {}).get('runs', 0)
+                            
+                            df_bs = pd.DataFrame({
+                                "Team": [g['away_name'], g['home_name']],
+                                "Runs": [aw_r, hm_r],
+                                "Hits": [aw_stats.get('batting', {}).get('hits', 0), hm_stats.get('batting', {}).get('hits', 0)],
+                                "Errors": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
+                            })
+                            
+                            def highlight_winner(row):
+                                is_win = row['Runs'] == max(aw_r, hm_r)
+                                return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
+                            
+                            st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
+                        except Exception as e:
+                            st.error(f"Could not load box score: {e}")
             else: st.info("Analysis unavailable for non-MLB matchups.")
         st.markdown('</div>', unsafe_allow_html=True)
-    
+        
