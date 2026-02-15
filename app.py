@@ -54,11 +54,11 @@ with st.sidebar:
 def get_team_info(team_id, year):
     try:
         standings = statsapi.standings_data(leagueId="103,104", season=year)
-        if not standings: # Fallback to previous year if no standings yet
+        if not standings:
             standings = statsapi.standings_data(leagueId="103,104", season=year-1)
         for div in standings.values():
-            for t in div['teams']:
-                if t['team_id'] == team_id:
+            for t in div.get('teams', []):
+                if t.get('team_id') == team_id:
                     w, l = t.get('w', 0), t.get('l', 0)
                     return f"{w}-{l}", (int(w) / max(1, int(w)+int(l)))
         return "0-0", 0.500
@@ -68,38 +68,57 @@ def get_detailed_data(game_id, g_info, selected_year):
     try:
         box = statsapi.boxscore_data(game_id)
         def fetch_metrics(side, tid):
-            batters = box[side].get('batters', [])
+            side_data = box.get(side, {})
+            players = side_data.get('players', {})
+            batters = side_data.get('batters', [])
             l_names, avgs, slgs = [], [], []
             
-            # If no lineup announced, use placeholder names
             if not batters:
                 l_names = ["TBD Player"] * 9
                 avgs, slgs = [0.260]*9, [0.410]*9
             else:
                 for pid in batters[:9]:
-                    p = box[side]['players'][f"ID{pid}"]
-                    # Logic: If current year has no stats, pull from previous year
-                    s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
-                    s = s_data['stats'][0]['stats'] if (s_data.get('stats') and s_data['stats'][0]['stats'].get('atBats', 0) > 0) else {}
-                    if not s:
-                        s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year-1)
-                        s = s_data['stats'][0]['stats'] if s_data.get('stats') else {}
+                    p = players.get(f"ID{pid}", {})
+                    p_name = p.get('person', {}).get('fullName', "TBD Player")
                     
-                    l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
-                    avgs.append(float(str(s.get('avg', '.000')).replace('.','0.')) if s.get('avg') else 0.250)
-                    slgs.append(float(str(s.get('slg', '.000')).replace('.','0.')) if s.get('slg') else 0.400)
+                    # Safe stat fetching
+                    try:
+                        s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
+                        stats_list = s_data.get('stats', [])
+                        s = stats_list[0].get('stats', {}) if (stats_list and stats_list[0].get('stats', {}).get('atBats', 0) > 0) else {}
+                        if not s:
+                            s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year-1)
+                            stats_list = s_data.get('stats', [])
+                            s = stats_list[0].get('stats', {}) if stats_list else {}
+                    except: s = {}
+                    
+                    # Safe hits/at-bats for display
+                    b_stats = p.get('stats', {}).get('batting', {})
+                    hits = b_stats.get('hits', 0)
+                    abs_val = b_stats.get('atBats', 0)
+                    
+                    l_names.append(f"{p_name} ({hits}/{abs_val})")
+                    avgs.append(float(str(s.get('avg', '.250')).replace('.','0.')) if s.get('avg') else 0.250)
+                    slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')) if s.get('slg') else 0.400)
 
-            sp_id = box[side].get('pitchers', [None])[0]
+            # Safe Pitcher fetching
+            pitchers_list = side_data.get('pitchers', [])
+            sp_id = pitchers_list[0] if pitchers_list else None
             p_name, p_era = "TBD Pitcher", 4.10
+            
             if sp_id:
-                p_info = box[side]['players'].get(f"ID{sp_id}", {})
+                p_info = players.get(f"ID{sp_id}", {})
                 p_name = p_info.get('person', {}).get('fullName', "TBD Pitcher")
-                sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year)
-                s_p = sp_stat['stats'][0]['stats'] if (sp_stat.get('stats') and sp_stat['stats'][0]['stats'].get('inningsPitched', '0') != '0') else {}
-                if not s_p:
-                    sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year-1)
-                    s_p = sp_stat['stats'][0]['stats'] if sp_stat.get('stats') else {}
-                p_era = float(s_p.get('era', 4.10))
+                try:
+                    sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year)
+                    stats_list = sp_stat.get('stats', [])
+                    s_p = stats_list[0].get('stats', {}) if (stats_list and stats_list[0].get('stats', {}).get('inningsPitched', '0') != '0') else {}
+                    if not s_p:
+                        sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year-1)
+                        stats_list = sp_stat.get('stats', [])
+                        s_p = stats_list[0].get('stats', {}) if stats_list else {}
+                    p_era = float(s_p.get('era', 4.10))
+                except: p_era = 4.10
             
             _, wpct = get_team_info(tid, selected_year)
             score = (wpct * (w_std/100)) + ((4.1/max(0.5, p_era)) * (w_era/100)) + \
@@ -111,7 +130,6 @@ def get_detailed_data(game_id, g_info, selected_year):
         prob_h = (h_data['score'] / max(0.1, (a_data['score'] + h_data['score']))) + 0.04
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except Exception as e:
-        st.error(f"Data Error: {e}")
         return None
 
 # --- MAIN UI ---
@@ -119,11 +137,11 @@ st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
 games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
-sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
+sorted_games = sorted(games, key=lambda x: (x.get('away_name') != fav_team and x.get('home_name') != fav_team))
 
 for g in sorted_games:
     gid = g['game_id']
-    is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
+    is_fav = (g.get('away_name') == fav_team or g.get('home_name') == fav_team)
     rec_a, _ = get_team_info(g['away_id'], selected_year)
     rec_h, _ = get_team_info(g['home_id'], selected_year)
 
@@ -133,8 +151,8 @@ for g in sorted_games:
         with cols[0]: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=60)
         with cols[1]: 
             fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
-            st.markdown(f"### {g['away_name']} ({rec_a}) @ {g['home_name']} ({rec_h}) {fav_html}", unsafe_allow_html=True)
-            st.caption(f"Status: {g['status']}")
+            st.markdown(f"### {g.get('away_name')} ({rec_a}) @ {g.get('home_name')} ({rec_h}) {fav_html}", unsafe_allow_html=True)
+            st.caption(f"Status: {g.get('status')} | Year: {selected_year}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -142,14 +160,17 @@ for g in sorted_games:
             data = get_detailed_data(gid, g, selected_year)
             if data:
                 p_h = data['prob_h']
-                winner = g['home_name'] if p_h > 0.5 else g['away_name']
+                winner = g.get('home_name') if p_h > 0.5 else g.get('away_name')
                 st.markdown(f"<div class='winner-box'>🏅 <b>Projected Winner: {winner}</b></div>", unsafe_allow_html=True)
-                st.progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% | {g['away_name']} {(1-p_h)*100:.1f}%")
+                st.progress(p_h, text=f"{g.get('home_name')} {p_h*100:.1f}% | {g.get('away_name')} {(1-p_h)*100:.1f}%")
 
                 c1, c2 = st.columns(2)
-                for col, side, d, t_name in [(c1, 'Away', data['a'], g['away_name']), (c2, 'Home', data['h'], g['home_name'])]:
+                for col, side, d, t_name in [(c1, 'Away', data['a'], g.get('away_name')), (c2, 'Home', data['h'], g.get('home_name'))]:
                     with col:
                         st.markdown(f"**{t_name} Starter**")
                         st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>ERA: {d['p_era'] if d['p_name'] != "TBD Pitcher" else "TBD"}</div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
+            else:
+                st.error("Stats not available for this matchup (likely exhibition or non-MLB).")
         st.markdown("</div>", unsafe_allow_html=True)
+                                                            
