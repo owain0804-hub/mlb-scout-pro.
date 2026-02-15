@@ -31,12 +31,10 @@ with st.sidebar:
     st.title("⚾ Model Intelligence")
     preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=0)
     
-    if preset == "Balanced":
-        w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
-    elif preset == "Pitching Heavy":
-        w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
-    elif preset == "Offense Heavy":
-        w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
+    # Weight logic
+    if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
+    elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
+    elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
     else:
         w_std = st.slider("Standings Weight %", 0, 100, value=40)
         w_era = st.slider("Pitching ERA Weight %", 0, 100, value=15)
@@ -119,12 +117,10 @@ def get_detailed_data(game_id, g_info, selected_year):
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
         
-        # Calculate Percentage Impact Drivers
         avg_score = (h_data['total'] + a_data['total']) / 2
         diff = (h_data['total'] - a_data['total']) * sensitivity
-        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03 # +3% Home Advantage
+        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03 # Home Adv
         
-        # Drivers: Calculate how much each category influenced the final probability
         drivers = {
             "Standings": (h_data['std'] - a_data['std']) * sensitivity * 10,
             "Pitching": (h_data['pitch'] - a_data['pitch']) * sensitivity * 10,
@@ -137,10 +133,6 @@ def get_detailed_data(game_id, g_info, selected_year):
 st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
-
-# 2026 Labels
-st_start, reg_start = datetime(2026, 2, 20).date(), datetime(2026, 3, 25).date()
-phase_label = f"{selected_year} Spring Training" if st_start <= u_date < reg_start else f"{selected_year} Regular Season"
 
 games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 fav = st.session_state.fav_team
@@ -157,7 +149,7 @@ for g in sorted_games:
         with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
         with c2:
             st.markdown(f"**{g.get('away_name')} ({rec_a}) @ {g.get('home_name')} ({rec_h})**")
-            st.caption(f"{g.get('status')} | {phase_label}")
+            st.caption(f"{g.get('status')} | {selected_year} Season")
         with c3:
             if st.button("Analyze Matchup", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -172,17 +164,12 @@ for g in sorted_games:
                 
                 st.markdown(f"""<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({win_pct*100:.1f}%) <span class="confidence-badge" style="background:{conf_color}; color:#000;">{conf} Confidence</span></div>""", unsafe_allow_html=True)
                 
-                # IMPROVED DRIVERS SECTION
                 with st.expander("📊 Why this prediction? (Drivers)"):
-                    st.write(f"Detailed Advantage Breakdown for **{winner}**:")
-                    d = data['drivers']
-                    # Flip drivers if Away team is winner for display
-                    mult = 1 if p_h > 0.5 else -1
-                    st.markdown(f"* **Team Standings:** <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* **Pitching Matchup:** <span class='driver-val'>{'+' if d['Pitching']*mult > 0 else ''}{d['Pitching']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* **Lineup Efficiency:** <span class='driver-val'>{'+' if d['Offense']*mult > 0 else ''}{d['Offense']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* **Home Field Advantage:** <span class='driver-val'>+3.0%</span>", unsafe_allow_html=True)
-                    st.caption("Probabilities are calculated using historical 2025 performance data for current TBD players.")
+                    st.write(f"Advantage Contribution for **{winner}**:")
+                    d, mult = data['drivers'], (1 if p_h > 0.5 else -1)
+                    st.markdown(f"* Standings: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"* Pitching: <span class='driver-val'>{'+' if d['Pitching']*mult > 0 else ''}{d['Pitching']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"* Offense: <span class='driver-val'>{'+' if d['Offense']*mult > 0 else ''}{d['Offense']*mult:.1f}%</span>", unsafe_allow_html=True)
 
                 l_col1, l_col2 = st.columns(2)
                 for col, d_key, t_name in [(l_col1, 'a', g['away_name']), (l_col2, 'h', g['home_name'])]:
@@ -190,6 +177,27 @@ for g in sorted_games:
                         st.markdown(f"**{t_name}**")
                         st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era'] if data[d_key]['p_name'] != 'TBD Pitcher' else 'TBD'})</div>", unsafe_allow_html=True)
                         st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
+                
+                # BOX SCORE FEATURE
+                if g.get('status') in ["Final", "Game Over"]:
+                    st.divider()
+                    if st.button("📊 View Final Box Score", key=f"box_{gid}"):
+                        aw_r = data['box']['away']['teamStats']['batting'].get('runs', 0)
+                        hm_r = data['box']['home']['teamStats']['batting'].get('runs', 0)
+                        
+                        df_bs = pd.DataFrame({
+                            "Team": [g['away_name'], g['home_name']],
+                            "Runs": [aw_r, hm_r],
+                            "Hits": [data['box']['away']['teamStats']['batting'].get('hits', 0), data['box']['home']['teamStats']['batting'].get('hits', 0)],
+                            "Errors": [data['box']['away']['teamStats']['fielding'].get('errors', 0), data['box']['home']['teamStats']['fielding'].get('errors', 0)]
+                        })
+                        
+                        # Style: Highlight the row with more runs
+                        def highlight_winner(row):
+                            is_win = row['Runs'] == max(aw_r, hm_r)
+                            return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
+                        
+                        st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
             else: st.info("Analysis unavailable for non-MLB matchups.")
         st.markdown('</div>', unsafe_allow_html=True)
-                    
+    
