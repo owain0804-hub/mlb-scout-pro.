@@ -66,13 +66,15 @@ def get_team_info(team_id, year):
 def get_detailed_data(game_id, g_info, selected_year):
     try:
         box = statsapi.boxscore_data(game_id)
+        if not box: return None
+
         def fetch_metrics(side, tid):
             side_data = box.get(side, {})
             players, batters = side_data.get('players', {}), side_data.get('batters', [])
             l_rows, avgs, slgs = [], [], []
             
             if not batters:
-                l_rows = [{"Player": "TBD", "AVG": ".000"}] * 9
+                l_rows = [{"Player": "Lineup TBD", "AVG": ".000"}] * 9
                 avgs, slgs = [0.250]*9, [0.400]*9
             else:
                 for pid in batters[:9]:
@@ -135,22 +137,21 @@ def get_detailed_data(game_id, g_info, selected_year):
             "Lineup SLG": (h_data['slg_val'] - a_data['slg_val']) * sensitivity * 10
         }
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "drivers": drivers, "box": box}
-    except: return None
+    except Exception: return None
 
 # --- MAIN UI ---
 st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
 
-raw_games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
-
-# --- FIX: FILTER OUT DUPLICATE GAME IDS ---
-seen_game_ids = set()
+# Fetch schedule and ensure unique Game IDs only
+raw_sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_games = []
-for g in raw_games:
-    if g['game_id'] not in seen_game_ids:
+seen_ids = set()
+for g in raw_sched:
+    if g['game_id'] not in seen_ids:
         unique_games.append(g)
-        seen_game_ids.add(g['game_id'])
+        seen_ids.add(g['game_id'])
 
 fav = st.session_state.fav_team
 sorted_games = sorted(unique_games, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
@@ -188,33 +189,33 @@ for g in sorted_games:
                     st.markdown(f"* Pitching ERA Impact: <span class='driver-val'>{'+' if d['ERA Matchup']*mult > 0 else ''}{d['ERA Matchup']*mult:.1f}%</span>", unsafe_allow_html=True)
                     st.markdown(f"<div class='driver-detail'>Compare: {data['h']['p_name']} ({data['h']['p_era']}) vs {data['a']['p_name']} ({data['a']['p_era']})</div>", unsafe_allow_html=True)
                     st.markdown(f"* Lineup AVG (Consistency): <span class='driver-val'>{'+' if d['Lineup AVG']*mult > 0 else ''}{d['Lineup AVG']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='driver-detail'>Team Avgs: {data['h']['team_avg']:.3f} (H) vs {data['a']['team_avg']:.3f} (A)</div>", unsafe_allow_html=True)
                     st.markdown(f"* Lineup SLG (Power): <span class='driver-val'>{'+' if d['Lineup SLG']*mult > 0 else ''}{d['Lineup SLG']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='driver-detail'>Team Slugging: {data['h']['team_slg']:.3f} (H) vs {data['a']['team_slg']:.3f} (A)</div>", unsafe_allow_html=True)
 
                 l_col1, l_col2 = st.columns(2)
                 for col, d_key, t_name in [(l_col1, 'a', g['away_name']), (l_col2, 'h', g['home_name'])]:
                     with col:
                         st.markdown(f"**{t_name}**")
-                        st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era'] if data[d_key]['p_name'] != 'TBD Pitcher' else 'TBD'})</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era']})</div>", unsafe_allow_html=True)
                         st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
                 
                 if g.get('status') in ["Final", "Game Over"]:
                     st.divider()
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
                         try:
-                            aw_stats, hm_stats = data['box']['away'].get('teamStats', {}), data['box']['home'].get('teamStats', {})
-                            aw_r, hm_r = aw_stats.get('batting', {}).get('runs', 0), hm_stats.get('batting', {}).get('runs', 0)
+                            aw_stats = data['box']['away'].get('teamStats', {}).get('batting', {})
+                            hm_stats = data['box']['home'].get('teamStats', {}).get('batting', {})
                             df_bs = pd.DataFrame({
                                 "Team": [g['away_name'], g['home_name']],
-                                "Runs": [aw_r, hm_r],
-                                "Hits": [aw_stats.get('batting', {}).get('hits', 0), hm_stats.get('batting', {}).get('hits', 0)],
-                                "Errors": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
+                                "Runs": [aw_stats.get('runs', 0), hm_stats.get('runs', 0)],
+                                "Hits": [aw_stats.get('hits', 0), hm_stats.get('hits', 0)],
+                                "Errors": [data['box']['away'].get('teamStats', {}).get('fielding', {}).get('errors', 0), 
+                                           data['box']['home'].get('teamStats', {}).get('fielding', {}).get('errors', 0)]
                             })
                             def highlight_winner(row):
-                                is_win = row['Runs'] == max(aw_r, hm_r)
+                                is_win = row['Runs'] == df_bs['Runs'].max()
                                 return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
                             st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
-                        except Exception as e: st.error(f"Could not load box score: {e}")
-            else: st.info("Analysis unavailable for non-MLB matchups.")
+                        except: st.error("Box score data not yet available for this game.")
+            else: st.info("Detailed data unavailable for this matchup.")
         st.markdown('</div>', unsafe_allow_html=True)
+        
