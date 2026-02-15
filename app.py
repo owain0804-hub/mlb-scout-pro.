@@ -47,58 +47,66 @@ with st.sidebar:
         reset_weights()
         st.rerun()
 
-    w_std = st.slider("Standings Weight", 0, 100, key="slider_std", value=42)
-    w_era = st.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=15)
-    w_fip = st.slider("Pitcher FIP Weight", 0, 100, key="slider_fip", value=6)
-    w_avg = st.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=11)
-    w_slg = st.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=14)
-    w_bp = st.slider("Bullpen WAR Weight", 0, 100, key="slider_bp", value=12)
+    w_std = st.sidebar.slider("Standings Weight", 0, 100, key="slider_std", value=42)
+    w_era = st.sidebar.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=15)
+    w_fip = st.sidebar.slider("Pitcher FIP Weight", 0, 100, key="slider_fip", value=6)
+    w_avg = st.sidebar.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=11)
+    w_slg = st.sidebar.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=14)
+    w_bp = st.sidebar.slider("Bullpen WAR Weight", 0, 100, key="slider_bp", value=12)
 
-# --- CORE LOGIC (With Error Handling) ---
+# --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
-def get_player_streak(player_id):
+def get_advanced_stats(player_id, group):
     try:
-        s = statsapi.player_stat_data(player_id, group="hitting", type="season")
-        r = statsapi.player_stat_data(player_id, group="hitting", type="last7")
-        if not s.get('stats') or not r.get('stats'): return ""
-        s_avg = float(s['stats'][0]['stats'].get('avg', '.250').replace('.','0.'))
-        r_avg = float(r['stats'][0]['stats'].get('avg', '.250').replace('.','0.'))
-        return "🔥" if r_avg > s_avg + 0.06 else ("❄️" if r_avg < s_avg - 0.06 else "")
-    except: return ""
+        data = statsapi.player_stat_data(player_id, group=group, type="season")
+        return data['stats'][0]['stats'] if data.get('stats') else {}
+    except: return {}
+
+@st.cache_data(ttl=3600)
+def get_bullpen_war(team_id):
+    try:
+        roster = statsapi.get('team_roster', {'teamId': team_id})['roster']
+        relievers = [p['person']['id'] for p in roster if p['position']['code'] == '1']
+        total_war = 0.0
+        for pid in relievers[:5]:
+            stats = get_advanced_stats(pid, "pitching")
+            total_war += float(stats.get('war', 0.1))
+        return total_war / 2 
+    except: return 0.55
+
+@st.cache_data(ttl=300)
+def get_wpct(team_id):
+    try:
+        standings = statsapi.standings_data(leagueId="103,104")
+        for div in standings.values():
+            for t in div['teams']:
+                if t['team_id'] == team_id:
+                    return int(t.get('w',1))/(int(t.get('w',1))+int(t.get('l',1)))
+        return 0.500
+    except: return 0.500
 
 def get_detailed_data(game_id, g_info):
     try:
         box = statsapi.boxscore_data(game_id)
         def fetch_metrics(side, tid):
-            # Lineup processing
             batters = box[side].get('batters', [])[:9]
             l_names, avgs, slgs = [], [], []
             for pid in batters:
                 p = box[side]['players'][f"ID{pid}"]
-                streak = get_player_streak(pid)
-                l_names.append(f"{streak} {p['person']['fullName']}")
-                # Fallback for Spring Training missing stats
-                try:
-                    p_stat = statsapi.player_stat_data(pid, group="hitting", type="season")['stats'][0]['stats']
-                    avgs.append(float(p_stat.get('avg', '.250').replace('.','0.')))
-                    slgs.append(float(p_stat.get('slg', '.400').replace('.','0.')))
-                except: avgs.append(0.250); slgs.append(0.400)
+                l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
+                season = get_advanced_stats(pid, "hitting")
+                avgs.append(float(season.get('avg', '.250').replace('.','0.')))
+                slgs.append(float(season.get('slg', '.400').replace('.','0.')))
             
-            # Pitching processing
             sp_id = box[side].get('pitchers', [None])[0]
-            try:
-                sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats']
-            except: sp_stat = {'era': '4.10', 'fip': '4.10'}
+            sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
+            p_era, p_fip = float(sp_stat.get('era', 4.10)), float(sp_stat.get('fip', 4.10))
             
-            # Bullpen & Standing
-            standings = statsapi.standings_data(leagueId="103,104")
-            wpct = 0.500
-            for div in standings.values():
-                for t in div['teams']:
-                    if t['team_id'] == tid: wpct = int(t.get('w',1))/(int(t.get('w',1))+int(t.get('l',1)))
+            wpct = get_wpct(tid)
+            bp_war = get_bullpen_war(tid)
             
             adj = (wpct * (w_std/100)) + (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100)) + \
-                  ((4.1/float(sp_stat.get('era',4.1))) * (w_era/100))
+                  ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
             
             return {"names": l_names, "p_name": g_info.get(f'{side}_probable_pitcher', "TBD"), "wpct": adj, "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg"}
 
@@ -135,7 +143,6 @@ for g in sorted_games:
         if st.session_state.active_game_id == gid:
             data = get_detailed_data(gid, g)
             if data:
-                # Predictive Win Probability Bar
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 st.write("---")
                 st.write("### 🎯 Win Probability")
@@ -143,7 +150,7 @@ for g in sorted_games:
                 
                 tab1, tab2 = st.tabs(["📋 Scouting Report", "📊 Box Score"])
                 with tab1:
-                    st.info(f"**AI Insight:** Today's matchup favors the **{g['home_name'] if p_h > p_a else g['away_name']}** based on {w_std}% weighted standings and pitcher ERA efficiency.")
+                    st.info(f"**AI Insight:** Today's matchup favors the **{g['home_name'] if p_h > p_a else g['away_name']}**.")
                     col_a, col_h = st.columns(2)
                     col_a.write(f"**{g['away_name']} Lineup**")
                     col_a.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
@@ -156,6 +163,5 @@ for g in sorted_games:
                         "Runs": [b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)],
                         "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]
                     })
-                    st.dataframe(box_df, use_container_width=True, hide_index=True)
+                    st.table(box_df)
         st.markdown("</div>", unsafe_allow_html=True)
-                    
