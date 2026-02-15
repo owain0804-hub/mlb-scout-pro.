@@ -8,13 +8,14 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
 st_autorefresh(interval=30000, key="mlb_live_timer")
 
-# Custom CSS for a sleek Dark Mode UI
+# Custom CSS for UI
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .stButton>button:hover { border-color: #FFD700; color: #FFD700; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
+    .win-box { background: #1b2838; border: 1px solid #58a6ff; border-radius: 10px; padding: 12px; margin-bottom: 15px; color: #e6edf3; font-size: 0.9em; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -98,14 +99,22 @@ def get_detailed_data(game_id, g_info):
             
             sp_id = box[side].get('pitchers', [None])[0]
             sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
-            p_era, p_fip = float(sp_stat.get('era', 4.10)), float(sp_stat.get('fip', 4.10))
+            p_era = float(sp_stat.get('era', 4.10))
+            p_fip = float(sp_stat.get('fip', 4.10))
             wpct = get_wpct(tid)
             bp_war = get_bullpen_war(tid)
             
             adj = (wpct * (w_std/100)) + (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100)) + \
                   ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
             
-            return {"names": l_names, "p_name": g_info.get(f'{side}_probable_pitcher', "TBD"), "wpct": adj, "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg"}
+            # Why they will win logic
+            win_factor = "Superior lineup contact" if sum(avgs)/9 > 0.260 else "Strong defensive core"
+            if p_era < 3.5: win_factor = "Elite starting pitching"
+            if wpct > 0.550: win_factor = "Winning momentum & standings"
+            if bp_war > 0.8: win_factor = "Deep bullpen reliability"
+
+            return {"names": l_names, "p_name": g_info.get(f'{side}_probable_pitcher', "TBD"), "wpct": adj, 
+                    "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg", "factor": win_factor}
 
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
@@ -142,35 +151,37 @@ for g in sorted_games:
             if data:
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 st.write("---")
+                
+                # Probability Section
                 prob_cols = st.columns([1, 8, 1])
                 prob_cols[0].image(away_logo, width=50)
                 prob_cols[1].progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% Win Probability")
                 prob_cols[2].image(home_logo, width=50)
                 
-                tab1, tab2 = st.tabs(["📋 Scouting Report", "📊 Box Score"])
-                with tab1:
-                    col_a, col_h = st.columns(2)
-                    with col_a:
-                        st.markdown(f"#### <img src='{away_logo}' width='30'> {g['away_name']}", unsafe_allow_html=True)
-                        st.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
-                    with col_h:
-                        st.markdown(f"#### <img src='{home_logo}' width='30'> {g['home_name']}", unsafe_allow_html=True)
-                        st.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
-                with tab2:
-                    b = data['box']
-                    # SAFE GET for fielding errors
-                    aw_stats = b['away']['teamStats']
-                    hm_stats = b['home']['teamStats']
-                    
-                    aw_e = aw_stats.get('fielding', {}).get('errors', 0)
-                    hm_e = hm_stats.get('fielding', {}).get('errors', 0)
+                # SIDE-BY-SIDE LINEUPS & WIN BOXES
+                st.write("### 📋 Scouting Report")
+                col_left, col_right = st.columns(2)
+                
+                with col_left:
+                    st.markdown(f"<div class='win-box'>💡 <b>{g['away_name']} Win Factor:</b> {data['a']['factor']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"#### <img src='{away_logo}' width='30'> {g['away_name']}", unsafe_allow_html=True)
+                    st.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
+                
+                with col_right:
+                    st.markdown(f"<div class='win-box'>💡 <b>{g['home_name']} Win Factor:</b> {data['h']['factor']}</div>", unsafe_allow_html=True)
+                    st.markdown(f"#### <img src='{home_logo}' width='30'> {g['home_name']}", unsafe_allow_html=True)
+                    st.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
 
+                # Box Score Tab (Lower Section)
+                with st.expander("📊 View Detailed Box Score"):
+                    b = data['box']
+                    aw_stats, hm_stats = b['away']['teamStats'], b['home']['teamStats']
                     box_df = pd.DataFrame({
                         "Team": [g['away_name'], g['home_name']],
                         "Runs": [aw_stats['batting'].get('runs', 0), hm_stats['batting'].get('runs', 0)],
                         "Hits": [aw_stats['batting'].get('hits', 0), hm_stats['batting'].get('hits', 0)],
-                        "Errors": [aw_e, hm_e]
+                        "Errors": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
                     })
                     st.table(box_df)
         st.markdown("</div>", unsafe_allow_html=True)
-            
+        
