@@ -18,8 +18,6 @@ def reset_weights():
 
 # --- SIDEBAR TUNING & FAVORITES ---
 st.sidebar.header("⭐ User Preferences")
-
-# Fetch all team names for the favorite selector
 all_teams_data = statsapi.get('teams', {'sportId': 1})['teams']
 team_list = sorted([t['name'] for t in all_teams_data])
 fav_team = st.sidebar.selectbox("Select Favorite Team", ["None"] + team_list)
@@ -39,11 +37,18 @@ w_bp = st.sidebar.slider("Bullpen WAR Weight %", 0, 100, key="slider_bp", value=
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
-def get_advanced_stats(player_id, group):
+def get_player_streak(player_id):
     try:
-        data = statsapi.player_stat_data(player_id, group=group, type="season")
-        return data['stats'][0]['stats'] if data.get('stats') else {}
-    except: return {}
+        # Fetching season stats vs last 7 days
+        season = statsapi.player_stat_data(player_id, group="hitting", type="season")['stats'][0]['stats']
+        recent = statsapi.player_stat_data(player_id, group="hitting", type="last7")['stats'][0]['stats']
+        s_avg = float(season.get('avg', '.250').replace('.','0.'))
+        r_avg = float(recent.get('avg', '.250').replace('.','0.'))
+        
+        if r_avg > s_avg + 0.050: return "🔥"
+        if r_avg < s_avg - 0.050: return "❄️"
+        return ""
+    except: return ""
 
 @st.cache_data(ttl=3600)
 def get_bullpen_war(team_id):
@@ -52,8 +57,8 @@ def get_bullpen_war(team_id):
         relievers = [p['person']['id'] for p in roster if p['position']['code'] == '1']
         total_war = 0.0
         for pid in relievers[:5]:
-            stats = get_advanced_stats(pid, "pitching")
-            total_war += float(stats.get('war', 0.1))
+            data = statsapi.player_stat_data(pid, group="pitching", type="season")
+            if data.get('stats'): total_war += float(data['stats'][0]['stats'].get('war', 0.1))
         return total_war / 2 
     except: return 0.55
 
@@ -79,83 +84,71 @@ def get_detailed_data(game_id, game_info):
             if not batters_list: return ["Lineup TBD"] * 9, 0.250, 0.400
             for pid in batters_list:
                 p = box[side]['players'][f"ID{pid}"]
-                season = get_advanced_stats(pid, "hitting")
+                streak = get_player_streak(pid)
+                season = statsapi.player_stat_data(pid, group="hitting", type="season")['stats'][0]['stats']
                 avgs.append(float(season.get('avg', '.250').replace('.','0.')))
                 slgs.append(float(season.get('slg', '.400').replace('.','0.')))
-                players.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
+                players.append(f"{streak} {p['person']['fullName']}")
             return players, sum(avgs)/9, sum(slgs)/9
 
         def get_strength_metrics(side, team_id, team_name):
-            wpct = get_wpct(team_id)
+            wpct, bp_war = get_wpct(team_id), get_bullpen_war(team_id)
             lineup_names, l_avg, l_slg = process_lineup(side)
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             p_era, p_fip = float(sp_data.get('era', 4.10)), float(sp_data.get('fip', 4.10))
-            bp_war = get_bullpen_war(team_id)
-            
             adj_wpct = (wpct * (w_std/100)) + (l_avg * 4 * (w_avg/100)) + (l_slg * 2.5 * (w_slg/100)) + \
                        ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
-            
             return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": adj_wpct, 
                     "logo": f"https://www.mlbstatic.com/team-logos/{team_id}.svg", "lineup": lineup_names, 
                     "l_avg": l_avg, "l_slg": l_slg, "bp_war": bp_war}
 
-        a = get_strength_metrics('away', game_info['away_id'], game_info['away_name'])
-        h = get_strength_metrics('home', game_info['home_id'], game_info['home_name'])
-        
+        a, h = get_strength_metrics('away', game_info['away_id'], game_info['away_name']), get_strength_metrics('home', game_info['home_id'], game_info['home_name'])
         prob_h = (h['wpct'] - (a['wpct'] * h['wpct'])) / (a['wpct'] + h['wpct'] - (2 * a['wpct'] * h['wpct'])) + 0.04
         return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
 
-# --- UI RENDERING ---
+# --- UI ---
 st.title("⚾ MLB Intelligence: Pro Custom")
 u_date = st.text_input("Gameday Date (MM/DD/YYYY)", value=datetime.now().strftime("%m/%d/%Y"))
 games = statsapi.schedule(date=u_date)
-
-# Sort games to put favorite team at the top
 sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
 
 for g in sorted_games:
     is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
-    border_color = "#FFD700" if is_fav else "#333"
-    
     with st.container(border=True):
-        fav_label = "⭐ FAVORITE MATCHUP" if is_fav else ""
-        st.markdown(f"<span style='color:#FFD700; font-weight:bold;'>{fav_label}</span>", unsafe_allow_html=True)
+        if is_fav: st.markdown("<span style='color:#FFD700; font-weight:bold;'>⭐ FAVORITE MATCHUP</span>", unsafe_allow_html=True)
         st.write(f"### {g['away_name']} @ {g['home_name']}")
-        
         if st.button("Analyze Matchup", key=str(g['game_id'])):
             data = get_detailed_data(g['game_id'], g)
             if data:
                 p_h, p_a = data['prob_h']*100, (1-data['prob_h'])*100
-                st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:20px; border-radius:10px; border:2px solid {border_color}; color:white; align-items:center;">
+                st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:20px; border-radius:10px; border:2px solid {'#FFD700' if is_fav else '#333'}; color:white; align-items:center;">
                     <div style="text-align:center;"><img src="{data['a']['logo']}" width="80"><br>{g['away_name']}<br><b style="font-size:32px; color:#FF5252;">{p_a:.1f}%</b></div>
                     <div style="text-align:center; font-size:24px; opacity:0.5;">VS</div>
                     <div style="text-align:center;"><img src="{data['h']['logo']}" width="80"><br>{g['home_name']}<br><b style="font-size:32px; color:#4CAF50;">{p_h:.1f}%</b></div>
                 </div>""", unsafe_allow_html=True)
                 
-                st.info(f"""**TEAM BREAKDOWN** **{g['away_name']}**: AVG {data['a']['l_avg']:.3f} | SLG {data['a']['l_slg']:.3f} | Bullpen WAR {data['a']['bp_war']:.2f}  
-                **{g['home_name']}**: AVG {data['h']['l_avg']:.3f} | SLG {data['h']['l_slg']:.3f} | Bullpen WAR {data['h']['bp_war']:.2f}""")
-                
-                c1, c2 = st.columns(2)
-                for col, key in zip([c1, c2], ['a', 'h']):
-                    s = data[key]
-                    col.subheader(f"🏟️ {s['name']}")
-                    col.caption(f"ERA: {s['stats'].get('era','-.--')} | FIP: {s['stats'].get('fip','-.--')}")
-                
-                st.table(pd.DataFrame({g['away_name']: data['a']['lineup'], g['home_name']: data['h']['lineup']}))
-                
+                st.info(f"**{g['away_name']}**: AVG {data['a']['l_avg']:.3f} | SLG {data['a']['l_slg']:.3f} | Bullpen WAR {data['a']['bp_war']:.2f}\n\n**{g['home_name']}**: AVG {data['h']['l_avg']:.3f} | SLG {data['h']['l_slg']:.3f} | Bullpen WAR {data['h']['bp_war']:.2f}")
+
+                # LINEUP STYLING
+                def style_lineup(val):
+                    if "🔥" in val: return 'background-color: #1b5e20; color: white'
+                    if "❄️" in val: return 'background-color: #b71c1c; color: white'
+                    return ''
+
+                st.subheader("📋 Lineups (🔥=Hot, ❄️=Cold)")
+                lineup_df = pd.DataFrame({g['away_name']: data['a']['lineup'], g['home_name']: data['h']['lineup']})
+                st.table(lineup_df.style.applymap(style_lineup))
+
                 st.subheader("📊 Box Score")
                 b, status = data['box'], g.get('status', 'Final')
                 aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
-                box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], 
-                                      "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)], 
-                                      "E": [b['away']['teamStats'].get('fielding', {}).get('errors', 0), b['home']['teamStats'].get('fielding', {}).get('errors', 0)]})
-
+                box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)], "E": [b['away']['teamStats'].get('fielding', {}).get('errors', 0), b['home']['teamStats'].get('fielding', {}).get('errors', 0)]})
                 def highlight_winner(row):
                     if "Final" in status and aw_r != hm_r:
                         winner = g['away_name'] if aw_r > hm_r else g['home_name']
                         if row.Team == winner: return ['background-color: #2e7d32; color: white; font-weight: bold'] * len(row)
                     return [''] * len(row)
                 st.table(box_df.style.apply(highlight_winner, axis=1))
-            
+        
