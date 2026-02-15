@@ -51,14 +51,6 @@ with st.sidebar:
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
-def get_bullpen_era(team_id):
-    try:
-        # Pulls actual season bullpen ERA using reliever (rp) split code
-        stats = statsapi.get("team_stats", {"teamId": team_id, "season": 2026, "group": "pitching", "stats": "statSplits", "sitCodes": "rp"})
-        return float(stats['stats'][0]['splits'][0]['stat'].get('era', 4.10))
-    except: return 4.10
-
-@st.cache_data(ttl=3600)
 def get_team_wpct(team_id):
     try:
         standings = statsapi.standings_data(leagueId="103,104")
@@ -88,14 +80,12 @@ def get_detailed_data(game_id, g_info):
             p_era = float(sp_stat['stats'][0]['stats'].get('era', 4.10)) if sp_stat.get('stats') else 4.10
             
             wpct = get_team_wpct(tid)
-            bp_era = get_bullpen_era(tid)
-            
-            # Recalculated Prediction Weights (Standings 40, Starter 15, AVG 20, SLG 25)
+            # Logic: Standings 40%, Starter ERA 15%, Lineup AVG 20%, SLG 25%
             score = (wpct * (w_std/100)) + ((4.1/p_era) * (w_era/100)) + \
                     (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
             
             return {"names": l_names, "p_name": box[side]['players'].get(f"ID{sp_id}", {}).get('person', {}).get('fullName', 'TBD'), 
-                    "p_era": p_era, "bp_era": bp_era, "score": score}
+                    "p_era": p_era, "score": score}
 
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
@@ -119,6 +109,7 @@ for g in sorted_games:
         with cols[1]: 
             fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
             st.markdown(f"### {g['away_name']} @ {g['home_name']} {fav_html}", unsafe_allow_html=True)
+            st.caption(f"Status: {g['status']}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -133,9 +124,20 @@ for g in sorted_games:
                 col_a, col_h = st.columns(2)
                 for side, col, d, t_name in [('Away', col_a, data['a'], g['away_name']), ('Home', col_h, data['h'], g['home_name'])]:
                     with col:
-                        st.markdown(f"**{t_name} Pitching**")
-                        st.markdown(f"""<div class="pitcher-box"><b>SP: {d['p_name']}</b> (ERA: {d['p_era']})<br>
-                        <small>Bullpen ERA: {d['bp_era']:.2f}</small></div>""", unsafe_allow_html=True)
+                        st.markdown(f"**{t_name} Starter**")
+                        st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>Season ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
+
+                # Boxscore only for Finished Games
+                if g['status'] in ["Final", "Game Over", "Completed Early"]:
+                    if st.button("📊 View Final Box Score", key=f"box_{gid}"):
+                        b = data['box']
+                        aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
+                        df_box = pd.DataFrame({
+                            "Team": [g['away_name'], g['home_name']], "Runs": [aw_r, hm_r],
+                            "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)],
+                            "Errors": [b['away'].get('fielding', {}).get('errors', 0), b['home'].get('fielding', {}).get('errors', 0)]
+                        })
+                        st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
-        
+                        
