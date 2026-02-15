@@ -5,15 +5,13 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 # --- PAGE CONFIG & THEME ---
-st.set_page_config(page_title="MLB Scout Pro", layout="wide", page_icon="⚾")
+st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
 st_autorefresh(interval=30000, key="mlb_live_timer")
 
-# Custom CSS for UI
 st.markdown("""
     <style>
     .main { background-color: #0e1117; }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
-    .stButton>button:hover { border-color: #FFD700; color: #FFD700; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 20px; color: #e6edf3; }
     .pitcher-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px; text-align: center; margin-bottom: 5px; }
@@ -26,11 +24,13 @@ if "active_game_id" not in st.session_state:
 
 # --- RESET LOGIC ---
 def reset_weights():
-    st.session_state["slider_era"] = 30
-    st.session_state["slider_avg"] = 30
-    st.session_state["slider_slg"] = 40
+    st.session_state["w_std"] = 40
+    st.session_state["w_avg"] = 15
+    st.session_state["w_slg"] = 20
+    st.session_state["w_era"] = 13
+    st.session_state["w_bp"] = 12
 
-# --- SIDEBAR (Model Control) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("⚾ Settings")
     try:
@@ -40,17 +40,17 @@ with st.sidebar:
     fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list)
     
     st.divider()
-    st.header("probability Tuning")
-    st.caption("Adjust how much each stat affects the win %")
-    
-    if st.button("Reset to Default"):
+    st.header("⚙️ Model Tuning")
+    if st.button("🔄 Reset to Default"):
         reset_weights()
         st.rerun()
 
-    # Probability Sliders (using session_state keys for resetting)
-    w_era = st.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=30)
-    w_avg = st.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=30)
-    w_slg = st.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=40)
+    # Probability Sliders with your exact percentages as defaults
+    w_std = st.slider("Standings Weight %", 0, 100, key="w_std", value=40)
+    w_avg = st.slider("Lineup AVG Weight %", 0, 100, key="w_avg", value=15)
+    w_slg = st.slider("Lineup SLG Weight %", 0, 100, key="w_slg", value=20)
+    w_era = st.slider("Starter ERA Weight %", 0, 100, key="w_era", value=13)
+    w_bp = st.slider("Bullpen ERA Weight %", 0, 100, key="w_bp", value=12)
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -60,10 +60,22 @@ def get_advanced_stats(player_id, group):
         return data['stats'][0]['stats'] if data.get('stats') else {}
     except: return {}
 
+@st.cache_data(ttl=3600)
+def get_team_wpct(team_id):
+    try:
+        standings = statsapi.standings_data(leagueId="103,104")
+        for div in standings.values():
+            for t in div['teams']:
+                if t['team_id'] == team_id:
+                    return int(t.get('w', 1)) / (int(t.get('w', 1)) + int(t.get('l', 1)))
+        return 0.500
+    except: return 0.500
+
 def get_detailed_data(game_id, g_info):
     try:
         box = statsapi.boxscore_data(game_id)
-        def fetch_metrics(side):
+        def fetch_metrics(side, tid):
+            # Batter Stats
             batters = box[side].get('batters', [])[:9]
             l_names, avgs, slgs = [], [], []
             for pid in batters:
@@ -73,19 +85,28 @@ def get_detailed_data(game_id, g_info):
                 avgs.append(float(str(season.get('avg', '.250')).replace('.','0.')))
                 slgs.append(float(str(season.get('slg', '.400')).replace('.','0.')))
             
+            # Pitcher Stats
             sp_id = box[side].get('pitchers', [None])[0]
             sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
-            p_era = sp_stat.get('era', '4.10')
+            p_era = float(sp_stat.get('era', 4.10))
             
-            # Dynamic Score based on Tuning Sliders
-            score = ( (4.1 / float(p_era)) * (w_era/100) ) + \
-                    ( (sum(avgs)/9) * 10 * (w_avg/100) ) + \
-                    ( (sum(slgs)/9) * 5 * (w_slg/100) )
+            # Team/Bullpen Stats
+            wpct = get_team_wpct(tid)
+            # Bullpen ERA proxy (Average of remaining pitchers in boxscore or league avg)
+            bp_era = 4.25 # Baseline league bullpen avg
+            
+            # Scoring Logic based on your 40/15/20/13/12 weights
+            score = (wpct * (w_std/100)) + \
+                    (sum(avgs)/9 * 4 * (w_avg/100)) + \
+                    (sum(slgs)/9 * 2.5 * (w_slg/100)) + \
+                    ((4.1/p_era) * (w_era/100)) + \
+                    ((4.1/bp_era) * (w_bp/100))
+            
             return {"names": l_names, "p_name": box[side]['players'].get(f"ID{sp_id}", {}).get('person', {}).get('fullName', 'TBD'), 
-                    "p_era": p_era, "score": score}
+                    "p_era": p_era, "bp_era": bp_era, "score": score}
 
-        a_data = fetch_metrics('away')
-        h_data = fetch_metrics('home')
+        a_data = fetch_metrics('away', g_info['away_id'])
+        h_data = fetch_metrics('home', g_info['home_id'])
         prob_h = (h_data['score'] / (a_data['score'] + h_data['score'])) + 0.04
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
@@ -99,7 +120,6 @@ sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['ho
 for g in sorted_games:
     gid = g['game_id']
     is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
-    
     with st.container():
         st.markdown(f"""<div class="matchup-card" style="border-left: 5px solid {'#FFD700' if is_fav else '#30363d'}">""", unsafe_allow_html=True)
         cols = st.columns([1, 3, 1])
@@ -121,19 +141,19 @@ for g in sorted_games:
                 col_a, col_h = st.columns(2)
                 for side, col, d, t_name in [('Away', col_a, data['a'], g['away_name']), ('Home', col_h, data['h'], g['home_name'])]:
                     with col:
-                        st.markdown(f"**{t_name} Starter**")
-                        st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
+                        st.markdown(f"**{t_name} Pitching**")
+                        st.markdown(f"""<div class="pitcher-box"><b>SP: {d['p_name']}</b> (ERA: {d['p_era']})<br>
+                        <small>Bullpen Strength: {d['bp_era']} ERA</small></div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
 
-                if st.button(" Box Score", key=f"boxscore_{gid}"):
+                if st.button("📊 Show Box Score", key=f"boxscore_{gid}"):
                     b = data['box']
                     aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
                     df_box = pd.DataFrame({
-                        "Team": [g['away_name'], g['home_name']],
-                        "Runs": [aw_r, hm_r],
+                        "Team": [g['away_name'], g['home_name']], "Runs": [aw_r, hm_r],
                         "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)],
                         "Errors": [b['away'].get('fielding', {}).get('errors', 0), b['home'].get('fielding', {}).get('errors', 0)]
                     })
                     st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
-                                    
+                    
