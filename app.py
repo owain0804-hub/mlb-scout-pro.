@@ -7,36 +7,36 @@ from streamlit_autorefresh import st_autorefresh
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
 st_autorefresh(interval=30000, key="mlb_live_timer")
 
+# --- RESET LOGIC ---
+def reset_weights():
+    st.session_state["slider_std"] = 42
+    st.session_state["slider_era"] = 15
+    st.session_state["slider_fip"] = 6
+    st.session_state["slider_avg"] = 11
+    st.session_state["slider_slg"] = 14
+    st.session_state["slider_bp"] = 12
+
 # --- SIDEBAR TUNING ---
-st.sidebar.header("⚙️ Probability Tuning")
+st.sidebar.header("⚙️ Model Tuning")
 
 if st.sidebar.button("🔄 Reset to Default"):
-    st.session_state.w_standings = 42
-    st.session_state.w_era = 15
-    st.session_state.w_fip = 6
-    st.session_state.w_avg = 11
-    st.session_state.w_slg = 14
-    st.session_state.w_bp = 12
+    reset_weights()
+    st.rerun()
 
-# Initialize session state for weights
-if 'w_standings' not in st.session_state: st.session_state.w_standings = 42
-if 'w_era' not in st.session_state: st.session_state.w_era = 15
-if 'w_fip' not in st.session_state: st.session_state.w_fip = 6
-if 'w_avg' not in st.session_state: st.session_state.w_avg = 11
-if 'w_slg' not in st.session_state: st.session_state.w_slg = 14
-if 'w_bp' not in st.session_state: st.session_state.w_bp = 12
-
-w_std = st.sidebar.slider("Standings Weight %", 0, 100, st.session_state.w_standings, key="slider_std")
-w_era = st.sidebar.slider("Pitcher ERA Weight %", 0, 100, st.session_state.w_era, key="slider_era")
-w_fip = st.sidebar.slider("Pitcher FIP Weight %", 0, 100, st.session_state.w_fip, key="slider_fip")
-w_avg = st.sidebar.slider("Lineup AVG Weight %", 0, 100, st.session_state.w_avg, key="slider_avg")
-w_slg = st.sidebar.slider("Lineup SLG Weight %", 0, 100, st.session_state.w_slg, key="slider_slg")
-w_bp = st.sidebar.slider("Bullpen WAR Weight %", 0, 100, st.session_state.w_bp, key="slider_bp")
+# Sliders using the session state keys
+w_std = st.sidebar.slider("Standings Weight %", 0, 100, key="slider_std", value=42)
+w_era = st.sidebar.slider("Pitcher ERA Weight %", 0, 100, key="slider_era", value=15)
+w_fip = st.sidebar.slider("Pitcher FIP Weight %", 0, 100, key="slider_fip", value=6)
+w_avg = st.sidebar.slider("Lineup AVG Weight %", 0, 100, key="slider_avg", value=11)
+w_slg = st.sidebar.slider("Lineup SLG Weight %", 0, 100, key="slider_slg", value=14)
+w_bp = st.sidebar.slider("Bullpen WAR Weight %", 0, 100, key="slider_bp", value=12)
 
 total_weight = w_std + w_era + w_fip + w_avg + w_slg + w_bp
+st.sidebar.divider()
 st.sidebar.write(f"**Total Allocation: {total_weight}%**")
+
 if total_weight != 100:
-    st.sidebar.warning("⚠️ Weights should total 100% for best accuracy.")
+    st.sidebar.error(f"⚠️ Sum is {total_weight}%. Model requires 100%.")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -54,9 +54,9 @@ def get_team_info(team_name):
             for team in division['teams']:
                 if team['name'] == team_name:
                     w, l = int(team.get('w', 1)), int(team.get('l', 1))
-                    return {"div_id": div_id, "rank": int(team.get('div_rank', 5)), "wpct": w/(w+l)}
-        return {"div_id": None, "rank": 5, "wpct": 0.500}
-    except: return {"div_id": None, "rank": 5, "wpct": 0.500}
+                    return {"div_id": div_id, "wpct": w/(w+l)}
+        return {"div_id": None, "wpct": 0.500}
+    except: return {"div_id": None, "wpct": 0.500}
 
 @st.cache_data(ttl=15)
 def get_detailed_data(game_id, game_info):
@@ -84,8 +84,7 @@ def get_detailed_data(game_id, game_info):
             pitchers = box[side].get('pitchers', [])
             bp_war = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
-            # NORMALIZING FACTORS (to make weights behave properly)
-            # Standings: 0-1, ERA/FIP: 4.1/score, AVG: score*4, SLG: score*2.5
+            # Apply your custom weights from the sidebar
             adj_wpct = (t_info['wpct'] * (w_std/100)) + \
                        (l_avg * 4 * (w_avg/100)) + \
                        (l_slg * 2.5 * (w_slg/100)) + \
@@ -93,39 +92,35 @@ def get_detailed_data(game_id, game_info):
                        ((4.1/p_fip) * (w_fip/100)) + \
                        (bp_war * (w_bp/100))
             
-            # Spread 1.01
-            spread_factor = 1.01 
-            amplified_wpct = (adj_wpct**spread_factor) / ((adj_wpct**spread_factor) + ((1-adj_wpct)**spread_factor))
-            return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": amplified_wpct, "div_id": t_info['div_id'], "lineup": lineup_names, "l_avg": l_avg, "l_slg": l_slg, "bp_war": bp_war}
+            return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": adj_wpct, "div_id": t_info['div_id'], "lineup": lineup_names, "l_avg": l_avg, "l_slg": l_slg, "bp_war": bp_war}
 
         a, h = get_strength_metrics('away', game_info['away_name']), get_strength_metrics('home', game_info['home_name'])
         pa, pb = a['wpct'], h['wpct']
+        
+        # Log-5 Formula with 1.01 spread and Home Field
         prob_h = (pb - (pa * pb)) / (pa + pb - (2 * pa * pb)) + 0.04
-        return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box, "note": "Divisional battle." if a['div_id'] == h['div_id'] else "Inter-divisional matchup."}
+        return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
 
-# --- UI RENDERING ---
-col_logo, col_title = st.columns([1, 6])
-with col_logo: st.image("https://www.mlbstatic.com/team-logos/league-laundry/mlb.svg", width=70)
-with col_title: st.title("MLB Intelligence: Pro Custom")
-
+# --- UI ---
+st.title("⚾ MLB Intelligence: Pro Custom")
 u_date = st.text_input("Gameday Date", value=datetime.now().strftime("%m/%d/%Y"))
 games = statsapi.schedule(date=u_date)
 
 for g in games:
     with st.container(border=True):
         st.write(f"### {g['away_name']} @ {g['home_name']}")
-        if st.button("Analyze", key=str(g['game_id'])):
+        if st.button("Analyze Matchup", key=str(g['game_id'])):
             data = get_detailed_data(g['game_id'], g)
             if data:
                 p_h, p_a = data['prob_h']*100, (1-data['prob_h'])*100
-                st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:15px; border-radius:10px; border:1px solid #333; color:white; align-items:center;">
-                    <div style="text-align:center;">{g['away_name']}<br><b style="font-size:28px; color:#FF5252;">{p_a:.1f}%</b></div>
-                    <div style="text-align:center;"><img src="https://www.mlbstatic.com/team-logos/league-laundry/mlb.svg" width="45"><br><small>LIVE MODEL</small></div>
-                    <div style="text-align:center;">{g['home_name']}<br><b style="font-size:28px; color:#4CAF50;">{p_h:.1f}%</b></div>
+                st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:20px; border-radius:10px; border:1px solid #333; color:white; align-items:center;">
+                    <div style="text-align:center;">{g['away_name']}<br><b style="font-size:32px; color:#FF5252;">{p_a:.1f}%</b></div>
+                    <div style="text-align:center;"><img src="https://www.mlbstatic.com/team-logos/league-laundry/mlb.svg" width="50"></div>
+                    <div style="text-align:center;">{g['home_name']}<br><b style="font-size:32px; color:#4CAF50;">{p_h:.1f}%</b></div>
                 </div>""", unsafe_allow_html=True)
                 
-                st.info(f"💡 **AI Insight:** {data['note']} | **SLG:** {data['a']['l_slg']:.3f} vs {data['h']['l_slg']:.3f} | **Bullpen WAR:** {data['a']['bp_war']:.2f} vs {data['h']['bp_war']:.2f}")
+                st.info(f"💡 **AI Insight:** | **AVG/SLG:** {data['a']['l_avg']:.3f}/{data['a']['l_slg']:.3f} vs {data['h']['l_avg']:.3f}/{data['h']['l_slg']:.3f} | **Bullpen WAR:** {data['a']['bp_war']:.2f} vs {data['h']['bp_war']:.2f}")
                 
                 c1, c2 = st.columns(2)
                 for col, key in zip([c1, c2], ['a', 'h']):
@@ -134,8 +129,3 @@ for g in games:
                     col.caption(f"ERA: {s['stats'].get('era','-.--')} | FIP: {s['stats'].get('fip','-.--')}")
                 st.table(pd.DataFrame({g['away_name']: data['a']['lineup'], g['home_name']: data['h']['lineup']}))
                 
-                b = data['box']
-                aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
-                df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]})
-                st.table(df)
-        
