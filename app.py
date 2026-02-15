@@ -31,7 +31,7 @@ def reset_weights():
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("⚾ Settings")
+    st.title(" Settings")
     try:
         all_teams = statsapi.get('teams', {'sportId': 1})['teams']
         team_list = sorted([t['name'] for t in all_teams])
@@ -39,8 +39,8 @@ with st.sidebar:
     fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list)
     
     st.divider()
-    st.header("⚙️ Model Tuning")
-    if st.button("🔄 Reset to Default"):
+    st.header(" Model Tuning")
+    if st.button("Reset to Default"):
         reset_weights()
         st.rerun()
 
@@ -94,7 +94,7 @@ def get_detailed_data(game_id, g_info):
     except: return None
 
 # --- MAIN UI ---
-st.title("⚾ MLB Intelligence Pro")
+st.title(" MLB probability Pro")
 u_date = st.date_input("Select Date", datetime.now())
 games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
@@ -107,7 +107,7 @@ for g in sorted_games:
         cols = st.columns([1, 3, 1])
         with cols[0]: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=60)
         with cols[1]: 
-            fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
+            fav_html = '<span class="fav-tag"> FAVORITE</span>' if is_fav else ''
             st.markdown(f"### {g['away_name']} @ {g['home_name']} {fav_html}", unsafe_allow_html=True)
             st.caption(f"Status: {g['status']}")
         with cols[2]: 
