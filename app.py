@@ -16,6 +16,7 @@ st.markdown("""
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 20px; color: #e6edf3; }
     .pitcher-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px; text-align: center; margin-bottom: 5px; }
     .fav-tag { color: #FFD700; font-weight: bold; font-size: 0.8em; border: 1px solid #FFD700; border-radius: 5px; padding: 2px 5px; }
+    .record-text { color: #8b949e; font-size: 0.85em; font-weight: normal; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -31,7 +32,7 @@ def reset_weights():
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title(" Settings")
+    st.title("⚾ Settings")
     try:
         all_teams = statsapi.get('teams', {'sportId': 1})['teams']
         team_list = sorted([t['name'] for t in all_teams])
@@ -39,8 +40,8 @@ with st.sidebar:
     fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list)
     
     st.divider()
-    st.header(" Model Tuning")
-    if st.button("Reset to Default"):
+    st.header("⚙️ Model Tuning")
+    if st.button("🔄 Reset to Default"):
         reset_weights()
         st.rerun()
 
@@ -51,15 +52,17 @@ with st.sidebar:
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
-def get_team_wpct(team_id):
+def get_team_info(team_id):
     try:
         standings = statsapi.standings_data(leagueId="103,104")
         for div in standings.values():
             for t in div['teams']:
                 if t['team_id'] == team_id:
-                    return int(t.get('w', 1)) / (max(1, int(t.get('w', 1)) + int(t.get('l', 1))))
-        return 0.500
-    except: return 0.500
+                    record = f"{t.get('w', 0)}-{t.get('l', 0)}"
+                    wpct = int(t.get('w', 1)) / (max(1, int(t.get('w', 1)) + int(t.get('l', 1))))
+                    return record, wpct
+        return "0-0", 0.500
+    except: return "0-0", 0.500
 
 def get_detailed_data(game_id, g_info):
     try:
@@ -79,8 +82,8 @@ def get_detailed_data(game_id, g_info):
             sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season") if sp_id else {}
             p_era = float(sp_stat['stats'][0]['stats'].get('era', 4.10)) if sp_stat.get('stats') else 4.10
             
-            wpct = get_team_wpct(tid)
-            # Logic: Standings 40%, Starter ERA 15%, Lineup AVG 20%, SLG 25%
+            _, wpct = get_team_info(tid)
+            # Standings 40, ERA 15, AVG 20, SLG 25
             score = (wpct * (w_std/100)) + ((4.1/p_era) * (w_era/100)) + \
                     (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
             
@@ -94,7 +97,7 @@ def get_detailed_data(game_id, g_info):
     except: return None
 
 # --- MAIN UI ---
-st.title(" MLB probability Pro")
+st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
@@ -102,13 +105,16 @@ sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['ho
 for g in sorted_games:
     gid = g['game_id']
     is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
+    away_rec, _ = get_team_info(g['away_id'])
+    home_rec, _ = get_team_info(g['home_id'])
+
     with st.container():
         st.markdown(f"""<div class="matchup-card" style="border-left: 5px solid {'#FFD700' if is_fav else '#30363d'}">""", unsafe_allow_html=True)
         cols = st.columns([1, 3, 1])
         with cols[0]: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=60)
         with cols[1]: 
-            fav_html = '<span class="fav-tag"> FAVORITE</span>' if is_fav else ''
-            st.markdown(f"### {g['away_name']} @ {g['home_name']} {fav_html}", unsafe_allow_html=True)
+            fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
+            st.markdown(f"### {g['away_name']} <span class='record-text'>({away_rec})</span> @ {g['home_name']} <span class='record-text'>({home_rec})</span> {fav_html}", unsafe_allow_html=True)
             st.caption(f"Status: {g['status']}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
@@ -128,7 +134,6 @@ for g in sorted_games:
                         st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>Season ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
 
-                # Boxscore only for Finished Games
                 if g['status'] in ["Final", "Game Over", "Completed Early"]:
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
                         b = data['box']
@@ -140,4 +145,4 @@ for g in sorted_games:
                         })
                         st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
-                        
+                                 
