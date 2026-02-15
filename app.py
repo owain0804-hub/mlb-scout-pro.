@@ -15,7 +15,6 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .stButton>button:hover { border-color: #FFD700; color: #FFD700; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
-    .logo-container { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -34,7 +33,6 @@ def reset_weights():
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("⚾ Settings")
-    st.header("⭐ Favorites")
     try:
         all_teams = statsapi.get('teams', {'sportId': 1})['teams']
         team_list = sorted([t['name'] for t in all_teams])
@@ -95,8 +93,8 @@ def get_detailed_data(game_id, g_info):
                 p = box[side]['players'][f"ID{pid}"]
                 l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
                 season = get_advanced_stats(pid, "hitting")
-                avgs.append(float(season.get('avg', '.250').replace('.','0.')))
-                slgs.append(float(season.get('slg', '.400').replace('.','0.')))
+                avgs.append(float(str(season.get('avg', '.250')).replace('.','0.')))
+                slgs.append(float(str(season.get('slg', '.400')).replace('.','0.')))
             
             sp_id = box[side].get('pitchers', [None])[0]
             sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
@@ -117,10 +115,8 @@ def get_detailed_data(game_id, g_info):
 
 # --- MAIN UI ---
 st.title("⚾ MLB Intelligence Pro")
-c_date, c_spacer = st.columns([2, 5])
-with c_date:
-    u_date = st.date_input("Select Date", datetime.now())
-    formatted_date = u_date.strftime("%m/%d/%Y")
+u_date = st.date_input("Select Date", datetime.now())
+formatted_date = u_date.strftime("%m/%d/%Y")
 
 games = statsapi.schedule(date=formatted_date)
 sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
@@ -137,7 +133,7 @@ for g in sorted_games:
         with cols[0]: st.image(away_logo, width=70)
         with cols[1]: 
             st.subheader(f"{g['away_name']} @ {g['home_name']}")
-            st.caption(f"🏟️ {g.get('venue_name', 'TBD')} | 🕒 {g.get('game_datetime', 'TBD')}")
+            st.caption(f"🏟️ {g.get('venue_name', 'TBD')} | Status: {g.get('status', 'Scheduled')}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -146,8 +142,6 @@ for g in sorted_games:
             if data:
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 st.write("---")
-                
-                # Logos + Win Probability Bar
                 prob_cols = st.columns([1, 8, 1])
                 prob_cols[0].image(away_logo, width=50)
                 prob_cols[1].progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% Win Probability")
@@ -164,11 +158,19 @@ for g in sorted_games:
                         st.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
                 with tab2:
                     b = data['box']
+                    # SAFE GET for fielding errors
+                    aw_stats = b['away']['teamStats']
+                    hm_stats = b['home']['teamStats']
+                    
+                    aw_e = aw_stats.get('fielding', {}).get('errors', 0)
+                    hm_e = hm_stats.get('fielding', {}).get('errors', 0)
+
                     box_df = pd.DataFrame({
                         "Team": [g['away_name'], g['home_name']],
-                        "Runs": [b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)],
-                        "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)],
-                        "Errors": [b['away']['teamStats']['fielding'].get('errors', 0), b['home']['teamStats']['fielding'].get('errors', 0)]
+                        "Runs": [aw_stats['batting'].get('runs', 0), hm_stats['batting'].get('runs', 0)],
+                        "Hits": [aw_stats['batting'].get('hits', 0), hm_stats['batting'].get('hits', 0)],
+                        "Errors": [aw_e, hm_e]
                     })
                     st.table(box_df)
         st.markdown("</div>", unsafe_allow_html=True)
+            
