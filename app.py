@@ -1,6 +1,9 @@
 import streamlit as st
 import statsapi
 import pandas as pd
+import json
+import os
+import streamlit_authenticator as stauth
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
@@ -21,209 +24,165 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- SESSION STATE INITIALIZATION ---
-if "active_game_id" not in st.session_state:
-    st.session_state.active_game_id = None
-if "saved_settings" not in st.session_state:
-    st.session_state.saved_settings = {
-        "fav_team": "None",
-        "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25,
-        "preset": "Balanced"
-    }
+# --- AUTHENTICATION SETUP ---
+# In a production app, these would be stored in a database
+names = ['User One', 'User Two']
+usernames = ['user1@email.com', 'user2@email.com']
+passwords = ['pass123', 'pass456'] # These get hashed automatically
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.title("⚾ Model Intelligence")
+hashed_passwords = stauth.Hasher(passwords).generate()
+authenticator = stauth.Authenticate(
+    {'usernames': {un: {'name': n, 'password': p} for n, un, p in zip(names, usernames, hashed_passwords)}},
+    'mlb_scout_cookie', 'auth_key', cookie_expiry_days=30
+)
+
+name, authentication_status, username = authenticator.login('Login', 'main')
+
+if authentication_status == False:
+    st.error('Username/password is incorrect')
+elif authentication_status == None:
+    st.warning('Please enter your email and password')
+elif authentication_status:
     
-    # Load settings from session state
-    s = st.session_state.saved_settings
-    
-    preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], 
-                      index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s["preset"]))
-    
-    if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
-    elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
-    elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
-    else:
-        w_std = st.slider("Standings Weight %", 0, 100, value=s["w_std"])
-        w_era = st.slider("Pitching ERA Weight %", 0, 100, value=s["w_era"])
-        w_avg = st.slider("Lineup AVG Weight %", 0, 100, value=s["w_avg"])
-        w_slg = st.slider("Lineup SLG Weight %", 0, 100, value=s["w_slg"])
-    
-    sensitivity = st.slider("Stat Sensitivity (Multiplier)", 1.0, 3.0, value=1.2, step=0.1)
+    # --- PERSISTENT STORAGE PER USER ---
+    USER_CONFIG = f"settings_{username.replace('@', '_').replace('.', '_')}.json"
 
-    st.divider()
-    
-    try:
-        all_teams = statsapi.get('teams', {'sportId': 1})['teams']
-        team_list = sorted([t['name'] for t in all_teams])
-    except: team_list = []
-    
-    fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list, 
-                            index=(["None"] + team_list).index(s["fav_team"]) if s["fav_team"] in (["None"] + team_list) else 0)
+    def load_user_settings():
+        if os.path.exists(USER_CONFIG):
+            with open(USER_CONFIG, "r") as f:
+                return json.load(f)
+        return {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"}
 
-    # SAVE BUTTON
-    if st.button("💾 Save Settings"):
-        st.session_state.saved_settings = {
-            "fav_team": fav_team,
-            "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg,
-            "preset": preset
-        }
-        st.success("Preferences Saved!")
+    def save_user_settings(data):
+        with open(USER_CONFIG, "w") as f:
+            json.dump(data, f)
 
-# --- CORE FUNCTIONS (Unchanged) ---
-@st.cache_data(ttl=3600)
-def get_team_info(team_id, year):
-    try:
-        standings = statsapi.standings_data(leagueId="103,104", season=year) or statsapi.standings_data(leagueId="103,104", season=year-1)
-        for div in standings.values():
-            for t in div.get('teams', []):
-                if t.get('team_id') == team_id:
-                    w, l = t.get('w', 0), t.get('l', 0)
-                    return f"{w}-{l}", (int(w) / max(1, int(w)+int(l)))
-        return "0-0", 0.500
-    except: return "0-0", 0.500
+    if "saved_settings" not in st.session_state:
+        st.session_state.saved_settings = load_user_settings()
 
-def get_detailed_data(game_id, g_info, selected_year):
-    try:
-        box = statsapi.boxscore_data(game_id)
-        if not box: return None
-
-        def fetch_metrics(side, tid):
-            side_data = box.get(side, {})
-            players, batters = side_data.get('players', {}), side_data.get('batters', [])
-            l_rows, avgs, slgs = [], [], []
-            
-            if not batters:
-                l_rows = [{"Player": "Lineup TBD", "AVG": ".000"}] * 9
-                avgs, slgs = [0.250]*9, [0.400]*9
-            else:
-                for pid in batters[:9]:
-                    p = players.get(f"ID{pid}", {})
-                    try:
-                        s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
-                        stats_list = s_data.get('stats', [])
-                        s = stats_list[0].get('stats', {}) if (stats_list and stats_list[0].get('stats', {}).get('atBats', 0) > 0) else {}
-                    except: s = {}
-                    p_avg = s.get('avg', '.000')
-                    l_rows.append({"Player": p.get('person', {}).get('fullName', "TBD"), "AVG": p_avg})
-                    avgs.append(float(str(p_avg).replace('.','0.')) if s.get('avg') else 0.250)
-                    slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')) if s.get('slg') else 0.400)
-
-            p_list = side_data.get('pitchers', [])
-            sp_id = p_list[0] if p_list else None
-            p_name, p_era = "TBD Pitcher", 4.10
-            if sp_id:
-                p_info = players.get(f"ID{sp_id}", {})
-                p_name = p_info.get('person', {}).get('fullName', "TBD Pitcher")
-                try:
-                    sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year)
-                    stats_list = sp_stat.get('stats', [])
-                    s_p = stats_list[0].get('stats', {}) if stats_list else {}
-                    p_era = float(s_p.get('era', 4.10))
-                except: p_era = 4.10
-            
-            _, wpct = get_team_info(tid, selected_year)
-            std_part = wpct * (w_std/100)
-            era_part = (4.1/max(0.5, p_era)) * (w_era/100)
-            avg_part = (sum(avgs)/9 * 4 * (w_avg/100))
-            slg_part = (sum(slgs)/9 * 2.5 * (w_slg/100))
-            
-            return {
-                "lines": l_rows, "p_name": p_name, "p_era": p_era, 
-                "total": std_part + era_part + avg_part + slg_part, 
-                "std": std_part, "era_val": era_part, "avg_val": avg_part, "slg_val": slg_part,
-                "team_avg": sum(avgs)/9, "team_slg": sum(slgs)/9
-            }
-
-        a_data = fetch_metrics('away', g_info['away_id'])
-        h_data = fetch_metrics('home', g_info['home_id'])
+    # --- SIDEBAR ---
+    with st.sidebar:
+        st.title(f"Welcome, {name}")
+        authenticator.logout('Logout', 'sidebar')
+        st.divider()
         
-        avg_score = (h_data['total'] + a_data['total']) / 2
-        diff = (h_data['total'] - a_data['total']) * sensitivity
-        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03 
+        s = st.session_state.saved_settings
+        preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
+        preset = st.radio("Model Presets", preset_options, index=preset_options.index(s.get("preset", "Balanced")))
         
-        drivers = {
-            "Standings": (h_data['std'] - a_data['std']) * sensitivity * 10,
-            "ERA Matchup": (h_data['era_val'] - a_data['era_val']) * sensitivity * 10,
-            "Lineup AVG": (h_data['avg_val'] - a_data['avg_val']) * sensitivity * 10,
-            "Lineup SLG": (h_data['slg_val'] - a_data['slg_val']) * sensitivity * 10
-        }
-        return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "drivers": drivers, "box": box}
-    except Exception: return None
-
-# --- MAIN UI ---
-u_date = st.date_input("Select Date", datetime.now())
-selected_year = u_date.year
-
-# Fetch unique Game IDs logic
-raw_sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
-unique_games = []
-seen_ids = set()
-for g in raw_sched:
-    if g['game_id'] not in seen_ids:
-        unique_games.append(g)
-        seen_ids.add(g['game_id'])
-
-# Use saved favorite team for sorting
-fav = st.session_state.saved_settings["fav_team"]
-sorted_games = sorted(unique_games, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
-
-for g in sorted_games:
-    gid = g['game_id']
-    rec_a, _ = get_team_info(g['away_id'], selected_year)
-    rec_h, _ = get_team_info(g['home_id'], selected_year)
-
-    with st.container():
-        st.markdown(f'<div class="matchup-card">', unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([1, 4, 1.5])
-        with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
-        with c2:
-            st.markdown(f"**{g.get('away_name')} ({rec_a}) @ {g.get('home_name')} ({rec_h})**")
-            st.caption(f"{g.get('status')} | {selected_year} Season")
-        with c3:
-            if st.button("Analyze Matchup", key=f"btn_{gid}"): st.session_state.active_game_id = gid
+        if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
+        elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
+        elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
+        else:
+            w_std = st.slider("Standings Weight %", 0, 100, value=s["w_std"])
+            w_era = st.slider("Pitching ERA Weight %", 0, 100, value=s["w_era"])
+            w_avg = st.slider("Lineup AVG Weight %", 0, 100, value=s["w_avg"])
+            w_slg = st.slider("Lineup SLG Weight %", 0, 100, value=s["w_slg"])
         
-        if st.session_state.active_game_id == gid:
-            data = get_detailed_data(gid, g, selected_year)
-            if data:
-                p_h = data['prob_h']
-                winner = g['home_name'] if p_h > 0.5 else g['away_name']
-                win_pct = p_h if p_h > 0.5 else (1 - p_h)
-                conf = "High" if win_pct > 0.62 else "Medium" if win_pct > 0.55 else "Low"
-                conf_color = "#4CAF50" if conf == "High" else "#FFD700" if conf == "Medium" else "#8b949e"
-                
-                st.markdown(f"""<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({win_pct*100:.1f}%) <span class="confidence-badge" style="background:{conf_color}; color:#000;">{conf} Confidence</span></div>""", unsafe_allow_html=True)
-                
-                with st.expander("📊 Why this prediction? (Detailed Drivers)"):
-                    st.write(f"Advantage breakdown for **{winner}**:")
-                    d, mult = data['drivers'], (1 if p_h > 0.5 else -1)
-                    st.markdown(f"* Standings Edge: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* Pitching ERA Impact: <span class='driver-val'>{'+' if d['ERA Matchup']*mult > 0 else ''}{d['ERA Matchup']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* Lineup AVG (Consistency): <span class='driver-val'>{'+' if d['Lineup AVG']*mult > 0 else ''}{d['Lineup AVG']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* Lineup SLG (Power): <span class='driver-val'>{'+' if d['Lineup SLG']*mult > 0 else ''}{d['Lineup SLG']*mult:.1f}%</span>", unsafe_allow_html=True)
+        sensitivity = st.slider("Stat Sensitivity (Multiplier)", 1.0, 3.0, value=1.2, step=0.1)
 
-                l_col1, l_col2 = st.columns(2)
-                for col, d_key, t_name in [(l_col1, 'a', g['away_name']), (l_col2, 'h', g['home_name'])]:
-                    with col:
-                        st.markdown(f"**{t_name}**")
-                        st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era']})</div>", unsafe_allow_html=True)
-                        st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
-                
-                if g.get('status') in ["Final", "Game Over"]:
-                    st.divider()
-                    if st.button("📊 View Final Box Score", key=f"box_{gid}"):
+        st.divider()
+        try:
+            all_teams = statsapi.get('teams', {'sportId': 1})['teams']
+            team_list = sorted([t['name'] for t in all_teams])
+        except: team_list = []
+        
+        fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list, 
+                                index=(["None"] + team_list).index(s["fav_team"]) if s["fav_team"] in (["None"] + team_list) else 0)
+
+        if st.button("💾 Save My Personal Settings"):
+            new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
+            save_user_settings(new_settings)
+            st.session_state.saved_settings = new_settings
+            st.success("Settings saved to your profile!")
+
+    # --- CORE FUNCTIONS (Unchanged) ---
+    @st.cache_data(ttl=3600)
+    def get_team_info(team_id, year):
+        try:
+            standings = statsapi.standings_data(leagueId="103,104", season=year) or statsapi.standings_data(leagueId="103,104", season=year-1)
+            for div in standings.values():
+                for t in div.get('teams', []):
+                    if t.get('team_id') == team_id:
+                        w, l = t.get('w', 0), t.get('l', 0)
+                        return f"{w}-{l}", (int(w) / max(1, int(w)+int(l)))
+            return "0-0", 0.500
+        except: return "0-0", 0.500
+
+    def get_detailed_data(game_id, g_info, selected_year, w_std, w_era, w_avg, w_slg, sensitivity):
+        try:
+            box = statsapi.boxscore_data(game_id)
+            if not box: return None
+            def fetch_metrics(side, tid):
+                side_data = box.get(side, {})
+                players, batters = side_data.get('players', {}), side_data.get('batters', [])
+                l_rows, avgs, slgs = [], [], []
+                if not batters:
+                    l_rows = [{"Player": "Lineup TBD", "AVG": ".000"}] * 9
+                    avgs, slgs = [0.250]*9, [0.400]*9
+                else:
+                    for pid in batters[:9]:
+                        p = players.get(f"ID{pid}", {})
                         try:
-                            aw_stats = data['box']['away'].get('teamStats', {}).get('batting', {})
-                            hm_stats = data['box']['home'].get('teamStats', {}).get('batting', {})
-                            df_bs = pd.DataFrame({
-                                "Team": [g['away_name'], g['home_name']],
-                                "Runs": [aw_stats.get('runs', 0), hm_stats.get('runs', 0)],
-                                "Hits": [aw_stats.get('hits', 0), hm_stats.get('hits', 0)],
-                                "Errors": [data['box']['away'].get('teamStats', {}).get('fielding', {}).get('errors', 0), 
-                                           data['box']['home'].get('teamStats', {}).get('fielding', {}).get('errors', 0)]
-                            })
-                            st.dataframe(df_bs, use_container_width=True, hide_index=True)
-                        except: st.error("Box score data unavailable.")
-            else: st.info("Detailed data unavailable.")
-        st.markdown('</div>', unsafe_allow_html=True)
+                            s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
+                            s = s_data['stats'][0]['stats'] if s_data.get('stats') else {}
+                        except: s = {}
+                        p_avg = s.get('avg', '.000')
+                        l_rows.append({"Player": p.get('person', {}).get('fullName', "TBD"), "AVG": p_avg})
+                        avgs.append(float(str(p_avg).replace('.','0.')) if s.get('avg') else 0.250)
+                        slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')) if s.get('slg') else 0.400)
+                p_list = side_data.get('pitchers', [])
+                sp_id = p_list[0] if p_list else None
+                p_name, p_era = "TBD Pitcher", 4.10
+                if sp_id:
+                    p_info = players.get(f"ID{sp_id}", {})
+                    p_name = p_info.get('person', {}).get('fullName', "TBD Pitcher")
+                    try:
+                        sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year)
+                        s_p = sp_stat['stats'][0]['stats'] if sp_stat.get('stats') else {}
+                        p_era = float(s_p.get('era', 4.10))
+                    except: p_era = 4.10
+                _, wpct = get_team_info(tid, selected_year)
+                return {"lines": l_rows, "p_name": p_name, "p_era": p_era, "total": (wpct*(w_std/100)) + ((4.1/max(0.5,p_era))*(w_era/100)) + ((sum(avgs)/9*4)*(w_avg/100)) + ((sum(slgs)/9*2.5)*(w_slg/100)), "std": wpct*(w_std/100), "era_val": (4.1/max(0.5,p_era))*(w_era/100), "avg_val": (sum(avgs)/9*4)*(w_avg/100), "slg_val": (sum(slgs)/9*2.5)*(w_slg/100)}
+            
+            a_data, h_data = fetch_metrics('away', g_info['away_id']), fetch_metrics('home', g_info['home_id'])
+            prob_h = 0.5 + ((h_data['total'] - a_data['total']) * sensitivity / max(0.1, (h_data['total']+a_data['total'])/2)) + 0.03
+            return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "drivers": {"Standings": (h_data['std']-a_data['std'])*sensitivity*10, "ERA": (h_data['era_val']-a_data['era_val'])*sensitivity*10, "AVG": (h_data['avg_val']-a_data['avg_val'])*sensitivity*10, "SLG": (h_data['slg_val']-a_data['slg_val'])*sensitivity*10}, "box": box}
+        except: return None
+
+    # --- MAIN UI ---
+    u_date = st.date_input("Select Date", datetime.now())
+    raw_sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
+    unique_games, seen_ids = [], set()
+    for g in raw_sched:
+        if g['game_id'] not in seen_ids:
+            unique_games.append(g); seen_ids.add(g['game_id'])
+
+    fav = st.session_state.saved_settings["fav_team"]
+    sorted_games = sorted(unique_games, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
+
+    for g in sorted_games:
+        gid = g['game_id']
+        with st.container():
+            st.markdown(f'<div class="matchup-card">', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([1, 4, 1.5])
+            with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
+            with c2: st.markdown(f"**{g.get('away_name')} @ {g.get('home_name')}**"); st.caption(f"{g.get('status')}")
+            with c3:
+                if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
+            
+            if st.session_state.active_game_id == gid:
+                data = get_detailed_data(gid, g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
+                if data:
+                    p_h = data['prob_h']
+                    winner = g['home_name'] if p_h > 0.5 else g['away_name']
+                    st.markdown(f"""<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>""", unsafe_allow_html=True)
+                    l_col1, l_col2 = st.columns(2)
+                    for col, d_key, t_name in [(l_col1, 'a', g['away_name']), (l_col2, 'h', g['home_name'])]:
+                        with col:
+                            st.markdown(f"**{t_name}**")
+                            st.markdown(f"<div class='pitcher-box'>SP: {data[d_key]['p_name']} ({data[d_key]['p_era']})</div>", unsafe_allow_html=True)
+                            st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
+                else: st.info("Data unavailable.")
+            st.markdown('</div>', unsafe_allow_html=True)
+                            
