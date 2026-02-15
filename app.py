@@ -16,6 +16,9 @@ st.markdown("""
     .stButton>button:hover { border-color: #FFD700; color: #FFD700; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 20px; color: #e6edf3; }
+    .pitcher-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 10px; text-align: center; margin-bottom: 10px; }
+    .pitcher-name { color: #58a6ff; font-weight: bold; font-size: 1.1em; }
+    .pitcher-era { color: #8b949e; font-size: 0.9em; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -99,19 +102,20 @@ def get_detailed_data(game_id, g_info):
             
             sp_id = box[side].get('pitchers', [None])[0]
             sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
-            p_era, p_fip = float(sp_stat.get('era', 4.10)), float(sp_stat.get('fip', 4.10))
+            p_era = sp_stat.get('era', '4.10')
+            p_fip = float(sp_stat.get('fip', 4.10))
             wpct = get_wpct(tid)
             bp_war = get_bullpen_war(tid)
             
             adj = (wpct * (w_std/100)) + (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100)) + \
-                  ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
+                  ((4.1/float(p_era)) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
             
-            # Winner insight logic
-            factor = "Elite rotation depth" if p_era < 3.6 else "Balanced contact hitting"
+            factor = "Elite rotation depth" if float(p_era) < 3.6 else "Balanced contact hitting"
             if wpct > 0.570: factor = "Elite regular season record"
             elif bp_war > 0.8: factor = "Shutdown bullpen performance"
 
-            return {"names": l_names, "wpct": adj, "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg", "factor": factor}
+            return {"names": l_names, "p_name": box[side]['players'].get(f"ID{sp_id}", {}).get('person', {}).get('fullName', 'TBD'), 
+                    "p_era": p_era, "wpct": adj, "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg", "factor": factor}
 
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
@@ -146,44 +150,37 @@ for g in sorted_games:
         if st.session_state.active_game_id == gid:
             data = get_detailed_data(gid, g)
             if data:
-                # Winner Logic
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 winner_name = g['home_name'] if p_h > p_a else g['away_name']
                 winner_factor = data['h']['factor'] if p_h > p_a else data['a']['factor']
                 
                 st.write("---")
-                
-                # Winning Info Box
                 st.markdown(f"""<div class="winner-box">🏅 <b>Projected Winner: {winner_name}</b><br>
                 <b>Strategy Insight:</b> {winner_factor}</div>""", unsafe_allow_html=True)
 
-                # Probabilities with Logos
                 prob_cols = st.columns([1, 8, 1])
                 prob_cols[0].image(away_logo, width=50)
                 prob_cols[1].progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% Win Probability")
                 prob_cols[2].image(home_logo, width=50)
                 
+                # SIDE-BY-SIDE STARTING PITCHERS
+                st.write("### 🏟️ Probable Starters")
+                p_col1, p_col2 = st.columns(2)
+                with p_col1:
+                    st.markdown(f"""<div class="pitcher-box"><span class="pitcher-name">{data['a']['p_name']}</span><br>
+                    <span class="pitcher-era">Season ERA: {data['a']['p_era']}</span></div>""", unsafe_allow_html=True)
+                with p_col2:
+                    st.markdown(f"""<div class="pitcher-box"><span class="pitcher-name">{data['h']['p_name']}</span><br>
+                    <span class="pitcher-era">Season ERA: {data['h']['p_era']}</span></div>""", unsafe_allow_html=True)
+
                 # SIDE-BY-SIDE LINEUPS
                 st.write("### 📋 Lineup Comparison")
                 lineup_col1, lineup_col2 = st.columns(2)
-                
                 with lineup_col1:
                     st.markdown(f"#### <img src='{away_logo}' width='30'> {g['away_name']}", unsafe_allow_html=True)
                     st.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
-                
                 with lineup_col2:
                     st.markdown(f"#### <img src='{home_logo}' width='30'> {g['home_name']}", unsafe_allow_html=True)
                     st.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
-
-                with st.expander("📊 Game Stats"):
-                    b = data['box']
-                    aw_stats, hm_stats = b['away']['teamStats'], b['home']['teamStats']
-                    box_df = pd.DataFrame({
-                        "Team": [g['away_name'], g['home_name']],
-                        "R": [aw_stats['batting'].get('runs', 0), hm_stats['batting'].get('runs', 0)],
-                        "H": [aw_stats['batting'].get('hits', 0), hm_stats['batting'].get('hits', 0)],
-                        "E": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
-                    })
-                    st.table(box_df)
         st.markdown("</div>", unsafe_allow_html=True)
-        
+    
