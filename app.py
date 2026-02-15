@@ -106,11 +106,10 @@ def get_detailed_data(game_id, g_info):
             adj = (wpct * (w_std/100)) + (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100)) + \
                   ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
             
-            # Logic for Why Team Will Win
-            factor = "High-contact lineup depth" if sum(avgs)/9 > 0.255 else "Standard offensive production"
-            if p_era < 3.7: factor = "Dominant starting pitching edge"
-            elif wpct > 0.560: factor = "Strong seasonal winning momentum"
-            elif bp_war > 0.75: factor = "Reliable late-game bullpen relief"
+            # Winner insight logic
+            factor = "Elite rotation depth" if p_era < 3.6 else "Balanced contact hitting"
+            if wpct > 0.570: factor = "Elite regular season record"
+            elif bp_war > 0.8: factor = "Shutdown bullpen performance"
 
             return {"names": l_names, "wpct": adj, "logo": f"https://www.mlbstatic.com/team-logos/{tid}.svg", "factor": factor}
 
@@ -147,40 +146,44 @@ for g in sorted_games:
         if st.session_state.active_game_id == gid:
             data = get_detailed_data(gid, g)
             if data:
+                # Winner Logic
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 winner_name = g['home_name'] if p_h > p_a else g['away_name']
                 winner_factor = data['h']['factor'] if p_h > p_a else data['a']['factor']
                 
                 st.write("---")
-                # Single Highlight Box for Winning Factor
-                st.markdown(f"""<div class="winner-box">🏆 <b>Projected Winner: {winner_name}</b><br>
-                <b>Key Advantage:</b> {winner_factor}</div>""", unsafe_allow_html=True)
+                
+                # Winning Info Box
+                st.markdown(f"""<div class="winner-box">🏅 <b>Projected Winner: {winner_name}</b><br>
+                <b>Strategy Insight:</b> {winner_factor}</div>""", unsafe_allow_html=True)
 
-                # Probabilities
+                # Probabilities with Logos
                 prob_cols = st.columns([1, 8, 1])
                 prob_cols[0].image(away_logo, width=50)
-                prob_cols[1].progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% vs {g['away_name']} {p_a*100:.1f}%")
+                prob_cols[1].progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% Win Probability")
                 prob_cols[2].image(home_logo, width=50)
                 
-                # Side-by-Side Lineups
+                # SIDE-BY-SIDE LINEUPS
                 st.write("### 📋 Lineup Comparison")
-                col_left, col_right = st.columns(2)
-                with col_left:
+                lineup_col1, lineup_col2 = st.columns(2)
+                
+                with lineup_col1:
                     st.markdown(f"#### <img src='{away_logo}' width='30'> {g['away_name']}", unsafe_allow_html=True)
                     st.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
-                with col_right:
+                
+                with lineup_col2:
                     st.markdown(f"#### <img src='{home_logo}' width='30'> {g['home_name']}", unsafe_allow_html=True)
                     st.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
 
-                with st.expander("📊 Box Score"):
+                with st.expander("📊 Game Stats"):
                     b = data['box']
                     aw_stats, hm_stats = b['away']['teamStats'], b['home']['teamStats']
                     box_df = pd.DataFrame({
                         "Team": [g['away_name'], g['home_name']],
-                        "Runs": [aw_stats['batting'].get('runs', 0), hm_stats['batting'].get('runs', 0)],
-                        "Hits": [aw_stats['batting'].get('hits', 0), hm_stats['batting'].get('hits', 0)],
-                        "Errors": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
+                        "R": [aw_stats['batting'].get('runs', 0), hm_stats['batting'].get('runs', 0)],
+                        "H": [aw_stats['batting'].get('hits', 0), hm_stats['batting'].get('hits', 0)],
+                        "E": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
                     })
                     st.table(box_df)
         st.markdown("</div>", unsafe_allow_html=True)
-                
+        
