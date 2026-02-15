@@ -16,7 +16,15 @@ def reset_weights():
     st.session_state["slider_slg"] = 14
     st.session_state["slider_bp"] = 12
 
-# --- SIDEBAR TUNING ---
+# --- SIDEBAR TUNING & FAVORITES ---
+st.sidebar.header("⭐ User Preferences")
+
+# Fetch all team names for the favorite selector
+all_teams_data = statsapi.get('teams', {'sportId': 1})['teams']
+team_list = sorted([t['name'] for t in all_teams_data])
+fav_team = st.sidebar.selectbox("Select Favorite Team", ["None"] + team_list)
+
+st.sidebar.divider()
 st.sidebar.header("⚙️ Model Tuning")
 if st.sidebar.button("🔄 Reset to Default"):
     reset_weights()
@@ -40,15 +48,13 @@ def get_advanced_stats(player_id, group):
 @st.cache_data(ttl=3600)
 def get_bullpen_war(team_id):
     try:
-        # Pulling Season Relief Pitching stats for the team to get varied WAR
         roster = statsapi.get('team_roster', {'teamId': team_id})['roster']
         relievers = [p['person']['id'] for p in roster if p['position']['code'] == '1']
         total_war = 0.0
-        # Check top 5 relievers by season performance to get a dynamic score
         for pid in relievers[:5]:
             stats = get_advanced_stats(pid, "pitching")
             total_war += float(stats.get('war', 0.1))
-        return total_war / 2 # Scaled for 12% weight impact
+        return total_war / 2 
     except: return 0.55
 
 @st.cache_data(ttl=300)
@@ -85,8 +91,6 @@ def get_detailed_data(game_id, game_info):
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             p_era, p_fip = float(sp_data.get('era', 4.10)), float(sp_data.get('fip', 4.10))
-            
-            # FIXED: Dynamic Bullpen WAR based on team roster season stats
             bp_war = get_bullpen_war(team_id)
             
             adj_wpct = (wpct * (w_std/100)) + (l_avg * 4 * (w_avg/100)) + (l_slg * 2.5 * (w_slg/100)) + \
@@ -103,19 +107,28 @@ def get_detailed_data(game_id, game_info):
         return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
 
-# --- UI ---
+# --- UI RENDERING ---
 st.title("⚾ MLB Intelligence: Pro Custom")
 u_date = st.text_input("Gameday Date (MM/DD/YYYY)", value=datetime.now().strftime("%m/%d/%Y"))
 games = statsapi.schedule(date=u_date)
 
-for g in games:
+# Sort games to put favorite team at the top
+sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
+
+for g in sorted_games:
+    is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
+    border_color = "#FFD700" if is_fav else "#333"
+    
     with st.container(border=True):
+        fav_label = "⭐ FAVORITE MATCHUP" if is_fav else ""
+        st.markdown(f"<span style='color:#FFD700; font-weight:bold;'>{fav_label}</span>", unsafe_allow_html=True)
         st.write(f"### {g['away_name']} @ {g['home_name']}")
+        
         if st.button("Analyze Matchup", key=str(g['game_id'])):
             data = get_detailed_data(g['game_id'], g)
             if data:
                 p_h, p_a = data['prob_h']*100, (1-data['prob_h'])*100
-                st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:20px; border-radius:10px; border:1px solid #333; color:white; align-items:center;">
+                st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:20px; border-radius:10px; border:2px solid {border_color}; color:white; align-items:center;">
                     <div style="text-align:center;"><img src="{data['a']['logo']}" width="80"><br>{g['away_name']}<br><b style="font-size:32px; color:#FF5252;">{p_a:.1f}%</b></div>
                     <div style="text-align:center; font-size:24px; opacity:0.5;">VS</div>
                     <div style="text-align:center;"><img src="{data['h']['logo']}" width="80"><br>{g['home_name']}<br><b style="font-size:32px; color:#4CAF50;">{p_h:.1f}%</b></div>
@@ -135,11 +148,9 @@ for g in games:
                 st.subheader("📊 Box Score")
                 b, status = data['box'], g.get('status', 'Final')
                 aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
-                aw_e, hm_e = b['away']['teamStats'].get('fielding', {}).get('errors', 0), b['home']['teamStats'].get('fielding', {}).get('errors', 0)
-
                 box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], 
                                       "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)], 
-                                      "E": [aw_e, hm_e]})
+                                      "E": [b['away']['teamStats'].get('fielding', {}).get('errors', 0), b['home']['teamStats'].get('fielding', {}).get('errors', 0)]})
 
                 def highlight_winner(row):
                     if "Final" in status and aw_r != hm_r:
@@ -147,3 +158,4 @@ for g in games:
                         if row.Team == winner: return ['background-color: #2e7d32; color: white; font-weight: bold'] * len(row)
                     return [''] * len(row)
                 st.table(box_df.style.apply(highlight_winner, axis=1))
+            
