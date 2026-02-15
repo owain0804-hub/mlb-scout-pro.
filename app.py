@@ -23,7 +23,6 @@ if st.sidebar.button("🔄 Reset to Default"):
     reset_weights()
     st.rerun()
 
-# Sliders using the session state keys
 w_std = st.sidebar.slider("Standings Weight %", 0, 100, key="slider_std", value=42)
 w_era = st.sidebar.slider("Pitcher ERA Weight %", 0, 100, key="slider_era", value=15)
 w_fip = st.sidebar.slider("Pitcher FIP Weight %", 0, 100, key="slider_fip", value=6)
@@ -84,7 +83,6 @@ def get_detailed_data(game_id, game_info):
             pitchers = box[side].get('pitchers', [])
             bp_war = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
-            # Apply your custom weights from the sidebar
             adj_wpct = (t_info['wpct'] * (w_std/100)) + \
                        (l_avg * 4 * (w_avg/100)) + \
                        (l_slg * 2.5 * (w_slg/100)) + \
@@ -97,7 +95,6 @@ def get_detailed_data(game_id, game_info):
         a, h = get_strength_metrics('away', game_info['away_name']), get_strength_metrics('home', game_info['home_name'])
         pa, pb = a['wpct'], h['wpct']
         
-        # Log-5 Formula with 1.01 spread and Home Field
         prob_h = (pb - (pa * pb)) / (pa + pb - (2 * pa * pb)) + 0.04
         return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
@@ -127,5 +124,37 @@ for g in games:
                     s = data[key]
                     col.subheader(f"🏟️ {s['name']}")
                     col.caption(f"ERA: {s['stats'].get('era','-.--')} | FIP: {s['stats'].get('fip','-.--')}")
+                
+                st.subheader("📋 Lineups")
                 st.table(pd.DataFrame({g['away_name']: data['a']['lineup'], g['home_name']: data['h']['lineup']}))
+                
+                # --- BOX SCORE SECTION ---
+                st.subheader("📊 Box Score")
+                b = data['box']
+                status = g.get('status', 'Final')
+                
+                # Fetch R/H/E
+                aw_r = b['away']['teamStats']['batting'].get('runs', 0)
+                hm_r = b['home']['teamStats']['batting'].get('runs', 0)
+                aw_h = b['away']['teamStats']['batting'].get('hits', 0)
+                hm_h = b['home']['teamStats']['batting'].get('hits', 0)
+                aw_e = b['away']['teamStats']['fielding'].get('errors', 0)
+                hm_e = b['home']['teamStats']['fielding'].get('errors', 0)
+
+                box_df = pd.DataFrame({
+                    "Team": [g['away_name'], g['home_name']],
+                    "R": [aw_r, hm_r],
+                    "H": [aw_h, hm_h],
+                    "E": [aw_e, hm_e]
+                })
+
+                # Highlighting logic for the winning team
+                def highlight_winner(row):
+                    if "Final" in status:
+                        winner = g['away_name'] if aw_r > hm_r else g['home_name']
+                        if row.Team == winner:
+                            return ['background-color: #2e7d32; color: white; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                st.table(box_df.style.apply(highlight_winner, axis=1))
                 
