@@ -37,10 +37,23 @@ def get_advanced_stats(player_id, group):
         return data['stats'][0]['stats'] if data.get('stats') else {}
     except: return {}
 
+@st.cache_data(ttl=3600)
+def get_bullpen_war(team_id):
+    try:
+        # Pulling Season Relief Pitching stats for the team to get varied WAR
+        roster = statsapi.get('team_roster', {'teamId': team_id})['roster']
+        relievers = [p['person']['id'] for p in roster if p['position']['code'] == '1']
+        total_war = 0.0
+        # Check top 5 relievers by season performance to get a dynamic score
+        for pid in relievers[:5]:
+            stats = get_advanced_stats(pid, "pitching")
+            total_war += float(stats.get('war', 0.1))
+        return total_war / 2 # Scaled for 12% weight impact
+    except: return 0.55
+
 @st.cache_data(ttl=300)
 def get_wpct(team_id):
     try:
-        # Fetch standings directly by team ID for accuracy
         standings = statsapi.standings_data(leagueId="103,104")
         for div in standings.values():
             for t in div['teams']:
@@ -72,9 +85,10 @@ def get_detailed_data(game_id, game_info):
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
             p_era, p_fip = float(sp_data.get('era', 4.10)), float(sp_data.get('fip', 4.10))
-            bp_war = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in box[side].get('pitchers', [])[1:4]])
             
-            # Using your 100% Weight Calculation
+            # FIXED: Dynamic Bullpen WAR based on team roster season stats
+            bp_war = get_bullpen_war(team_id)
+            
             adj_wpct = (wpct * (w_std/100)) + (l_avg * 4 * (w_avg/100)) + (l_slg * 2.5 * (w_slg/100)) + \
                        ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
             
@@ -107,7 +121,6 @@ for g in games:
                     <div style="text-align:center;"><img src="{data['h']['logo']}" width="80"><br>{g['home_name']}<br><b style="font-size:32px; color:#4CAF50;">{p_h:.1f}%</b></div>
                 </div>""", unsafe_allow_html=True)
                 
-                # SEPARATED TEXT BY TEAM IN THE BLUE BOX
                 st.info(f"""**TEAM BREAKDOWN** **{g['away_name']}**: AVG {data['a']['l_avg']:.3f} | SLG {data['a']['l_slg']:.3f} | Bullpen WAR {data['a']['bp_war']:.2f}  
                 **{g['home_name']}**: AVG {data['h']['l_avg']:.3f} | SLG {data['h']['l_slg']:.3f} | Bullpen WAR {data['h']['bp_war']:.2f}""")
                 
@@ -121,10 +134,8 @@ for g in games:
                 
                 st.subheader("📊 Box Score")
                 b, status = data['box'], g.get('status', 'Final')
-                aw_r = b['away']['teamStats']['batting'].get('runs', 0)
-                hm_r = b['home']['teamStats']['batting'].get('runs', 0)
-                aw_e = b['away']['teamStats'].get('fielding', {}).get('errors', 0)
-                hm_e = b['home']['teamStats'].get('fielding', {}).get('errors', 0)
+                aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
+                aw_e, hm_e = b['away']['teamStats'].get('fielding', {}).get('errors', 0), b['home']['teamStats'].get('fielding', {}).get('errors', 0)
 
                 box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], 
                                       "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)], 
@@ -136,4 +147,3 @@ for g in games:
                         if row.Team == winner: return ['background-color: #2e7d32; color: white; font-weight: bold'] * len(row)
                     return [''] * len(row)
                 st.table(box_df.style.apply(highlight_winner, axis=1))
-        
