@@ -50,16 +50,27 @@ def get_detailed_data(game_id, game_info):
         def get_strength_metrics(side, team_name):
             t_info = get_team_info(team_name)
             lineup_names, l_avg, l_slg = process_lineup(side)
-            pitchers = box[side].get('pitchers', [])
-            bp_score = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
+            
+            # Starting Pitcher logic: Split into 15% ERA and 6% FIP
             sp_id = box[side].get('pitchers', [None])[0]
             sp_data = statsapi.player_stat_data(sp_id, group="pitching", type="season")['stats'][0]['stats'] if sp_id else {}
-            pitching_skill = (float(sp_data.get('era', 4.00)) + float(sp_data.get('fip', 4.20))) / 2
+            p_era = float(sp_data.get('era', 4.10))
+            p_fip = float(sp_data.get('fip', 4.10))
             
-            # CORE WEIGHTING: Standings (45%), Lineup (25%), Pitching (30%)
-            adj_wpct = (t_info['wpct'] * 0.45) + (l_avg * 1.0) + (l_slg * 0.8) + (bp_score * 0.12) + ((4.1/pitching_skill) * 0.15)
+            # Bullpen remains (Remaining 11% of the 100% total)
+            pitchers = box[side].get('pitchers', [])
+            bp_score = sum([float(get_advanced_stats(p, "pitching").get('war', 0.05)) for p in pitchers[1:4]]) if len(pitchers) > 1 else 0.1
             
-            # STABLE SENSITIVITY: 1.01 Power Scaling (Near-Linear)
+            # THE EXACT REQUESTED WEIGHTS:
+            # Standings (42%) + AVG (11%) + SLG (14%) + ERA (15%) + FIP (6%) + Bullpen (12%)
+            adj_wpct = (t_info['wpct'] * 0.42) + \
+                       (l_avg * 0.44) + \
+                       (l_slg * 0.35) + \
+                       ((4.1/p_era) * 0.15) + \
+                       ((4.1/p_fip) * 0.06) + \
+                       (bp_score * 0.12)
+            
+            # Spread Factor 1.01
             spread_factor = 1.01 
             amplified_wpct = (adj_wpct**spread_factor) / ((adj_wpct**spread_factor) + ((1-adj_wpct)**spread_factor))
             
@@ -74,6 +85,7 @@ def get_detailed_data(game_id, game_info):
         return {"a": a, "h": h, "prob_h": max(0.01, min(0.99, prob_h)), "box": box, "note": note}
     except: return None
 
+# UI rendering remains unchanged
 st.title("⚾ MLB Intelligence: Pro")
 u_date = st.text_input("Gameday Date", value=datetime.now().strftime("%m/%d/%Y"))
 games = statsapi.schedule(date=u_date)
@@ -90,26 +102,22 @@ for g in games:
                     <div style="text-align:center;">{g['home_name']}<br><b style="font-size:24px; color:#4CAF50;">{p_h:.1f}%</b></div>
                 </div>""", unsafe_allow_html=True)
                 st.info(f"💡 **AI Insight:** {data['note']} | **SLG:** {g['away_name']} ({data['a']['l_slg']:.3f}) vs {g['home_name']} ({data['h']['l_slg']:.3f})")
-                
                 st.subheader("🏟️ Starters")
                 c1, c2 = st.columns(2)
                 for col, key in zip([c1, c2], ['a', 'h']):
                     s = data[key]
                     col.write(f"**{s['name']}**")
                     col.caption(f"ERA: {s['stats'].get('era','-.--')} | FIP: {s['stats'].get('fip','-.--')}")
-                
                 st.subheader("📋 Lineups")
                 st.table(pd.DataFrame({g['away_name']: data['a']['lineup'], g['home_name']: data['h']['lineup']}))
-                
                 st.subheader("📝 Scoreboard")
                 b, status = data['box'], g.get('status', '')
                 aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
                 df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [aw_r, hm_r], "H": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]})
-                
                 def highlight_winner(row):
                     if "Final" in status:
                         winner = g['away_name'] if aw_r > hm_r else g['home_name']
                         if row.Team == winner: return ['background-color: #1b5e20; color: white'] * len(row)
                     return [''] * len(row)
                 st.table(df.style.apply(highlight_winner, axis=1))
-            
+    
