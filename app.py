@@ -54,13 +54,11 @@ with st.sidebar:
 @st.cache_data(ttl=3600)
 def get_team_info(team_id, year):
     try:
-        # Fetch standings for the specific year chosen in the date picker
         standings = statsapi.standings_data(leagueId="103,104", season=year)
         for div in standings.values():
             for t in div['teams']:
                 if t['team_id'] == team_id:
-                    wins = t.get('w', 0)
-                    losses = t.get('l', 0)
+                    wins, losses = t.get('w', 0), t.get('l', 0)
                     record = f"{wins}-{losses}"
                     wpct = int(wins) / (max(1, int(wins) + int(losses)))
                     return record, wpct
@@ -71,32 +69,48 @@ def get_detailed_data(game_id, g_info, selected_year):
     try:
         box = statsapi.boxscore_data(game_id)
         def fetch_metrics(side, tid):
-            batters = box[side].get('batters', [])[:9]
+            batters = box[side].get('batters', [])
             l_names, avgs, slgs = [], [], []
-            for pid in batters:
-                p = box[side]['players'][f"ID{pid}"]
-                # Fetch season stats based on the selected year
-                s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
-                s = s_data['stats'][0]['stats'] if s_data.get('stats') else {}
-                l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
-                avgs.append(float(str(s.get('avg', '.250')).replace('.','0.')))
-                slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')))
             
+            # Handle Empty Lineups (TBD)
+            if not batters:
+                l_names = ["TBD Lineup"] * 9
+                avgs, slgs = [0.250]*9, [0.400]*9
+            else:
+                for pid in batters[:9]:
+                    p = box[side]['players'][f"ID{pid}"]
+                    try:
+                        s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
+                        s = s_data['stats'][0]['stats'] if s_data.get('stats') else {}
+                    except: s = {}
+                    l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
+                    avgs.append(float(str(s.get('avg', '.000')).replace('.','0.')) if s.get('avg') else 0.0)
+                    slgs.append(float(str(s.get('slg', '.000')).replace('.','0.')) if s.get('slg') else 0.0)
+
+            # Handle Missing Pitcher (TBD)
             sp_id = box[side].get('pitchers', [None])[0]
-            sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year) if sp_id else {}
-            p_era = float(sp_stat['stats'][0]['stats'].get('era', 4.10)) if sp_stat.get('stats') else 4.10
+            p_name = "TBD Pitcher"
+            p_era = 4.10
+            
+            if sp_id:
+                p_info = box[side]['players'].get(f"ID{sp_id}", {})
+                p_name = p_info.get('person', {}).get('fullName', "TBD Pitcher")
+                try:
+                    sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year)
+                    if sp_stat.get('stats'):
+                        p_era = float(sp_stat['stats'][0]['stats'].get('era', 4.10))
+                except: p_era = 4.10
             
             _, wpct = get_team_info(tid, selected_year)
-            # Weights: Standings 40, ERA 15, AVG 20, SLG 25
-            score = (wpct * (w_std/100)) + ((4.1/p_era) * (w_era/100)) + \
+            # Math: Standing 40, ERA 15, AVG 20, SLG 25
+            score = (wpct * (w_std/100)) + ((4.1/max(0.5, p_era)) * (w_era/100)) + \
                     (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
             
-            return {"names": l_names, "p_name": box[side]['players'].get(f"ID{sp_id}", {}).get('person', {}).get('fullName', 'TBD'), 
-                    "p_era": p_era, "score": score}
+            return {"names": l_names, "p_name": p_name, "p_era": p_era, "score": score}
 
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
-        prob_h = (h_data['score'] / (a_data['score'] + h_data['score'])) + 0.04
+        prob_h = (h_data['score'] / max(0.1, (a_data['score'] + h_data['score']))) + 0.04
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "box": box}
     except: return None
 
@@ -104,9 +118,7 @@ def get_detailed_data(game_id, g_info, selected_year):
 st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
-formatted_date = u_date.strftime("%m/%d/%Y")
-
-games = statsapi.schedule(date=formatted_date)
+games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
 
 for g in sorted_games:
@@ -121,35 +133,31 @@ for g in sorted_games:
         with cols[0]: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=60)
         with cols[1]: 
             fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
-            st.markdown(f"### {g['away_name']} <span class='record-text'>({away_rec})</span> @ {g['home_name']} <span class='record-text'>({home_rec})</span> {fav_html}", unsafe_allow_html=True)
-            st.caption(f"Status: {g['status']} | Season: {selected_year}")
+            st.markdown(f"### {g['away_name']} ({away_rec}) @ {g['home_name']} ({home_rec}) {fav_html}", unsafe_allow_html=True)
+            st.caption(f"Status: {g['status']} | Year: {selected_year}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
         if st.session_state.active_game_id == gid:
             data = get_detailed_data(gid, g, selected_year)
             if data:
-                p_h, p_a = data['prob_h'], 1 - data['prob_h']
-                winner = g['home_name'] if p_h > p_a else g['away_name']
+                p_h = data['prob_h']
+                winner = g['home_name'] if p_h > 0.5 else g['away_name']
                 st.markdown(f"<div class='winner-box'>🏅 <b>Projected Winner: {winner}</b></div>", unsafe_allow_html=True)
-                st.progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% | {g['away_name']} {p_a*100:.1f}%")
+                st.progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% | {g['away_name']} {(1-p_h)*100:.1f}%")
 
                 col_a, col_h = st.columns(2)
                 for side, col, d, t_name in [('Away', col_a, data['a'], g['away_name']), ('Home', col_h, data['h'], g['home_name'])]:
                     with col:
                         st.markdown(f"**{t_name} Starter**")
-                        st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>{selected_year} ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
-                        st.table(pd.DataFrame(d['names'], columns=[f"{selected_year} Lineup"]))
+                        st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>{selected_year} ERA: {d['p_era'] if d['p_name'] != "TBD Pitcher" else "TBD"}</div>""", unsafe_allow_html=True)
+                        st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
 
-                if g['status'] in ["Final", "Game Over", "Completed Early"]:
+                if g['status'] in ["Final", "Game Over"]:
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
                         b = data['box']
                         aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
-                        df_box = pd.DataFrame({
-                            "Team": [g['away_name'], g['home_name']], "Runs": [aw_r, hm_r],
-                            "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)],
-                            "Errors": [b['away'].get('fielding', {}).get('errors', 0), b['home'].get('fielding', {}).get('errors', 0)]
-                        })
-                        st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
+                        df_box = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "Runs": [aw_r, hm_r], "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]})
+                        st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*3 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*3, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
         
