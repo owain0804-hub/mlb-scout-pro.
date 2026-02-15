@@ -126,7 +126,7 @@ def get_detailed_data(game_id, g_info, selected_year):
         
         avg_score = (h_data['total'] + a_data['total']) / 2
         diff = (h_data['total'] - a_data['total']) * sensitivity
-        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03 # Fixed +3% Home Field Advantage
+        prob_h = 0.5 + (diff / max(0.1, avg_score)) + 0.03 
         
         drivers = {
             "Standings": (h_data['std'] - a_data['std']) * sensitivity * 10,
@@ -142,9 +142,18 @@ st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
 
-games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
+raw_games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
+
+# --- FIX: FILTER OUT DUPLICATE GAME IDS ---
+seen_game_ids = set()
+unique_games = []
+for g in raw_games:
+    if g['game_id'] not in seen_game_ids:
+        unique_games.append(g)
+        seen_game_ids.add(g['game_id'])
+
 fav = st.session_state.fav_team
-sorted_games = sorted(games, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
+sorted_games = sorted(unique_games, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
 for g in sorted_games:
     gid = g['game_id']
@@ -172,19 +181,14 @@ for g in sorted_games:
                 
                 st.markdown(f"""<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({win_pct*100:.1f}%) <span class="confidence-badge" style="background:{conf_color}; color:#000;">{conf} Confidence</span></div>""", unsafe_allow_html=True)
                 
-                # --- DETAILED DRIVERS (Removed Venue Splits) ---
                 with st.expander("📊 Why this prediction? (Detailed Drivers)"):
                     st.write(f"Advantage breakdown for **{winner}**:")
                     d, mult = data['drivers'], (1 if p_h > 0.5 else -1)
-                    
                     st.markdown(f"* Standings Edge: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    
                     st.markdown(f"* Pitching ERA Impact: <span class='driver-val'>{'+' if d['ERA Matchup']*mult > 0 else ''}{d['ERA Matchup']*mult:.1f}%</span>", unsafe_allow_html=True)
                     st.markdown(f"<div class='driver-detail'>Compare: {data['h']['p_name']} ({data['h']['p_era']}) vs {data['a']['p_name']} ({data['a']['p_era']})</div>", unsafe_allow_html=True)
-                    
                     st.markdown(f"* Lineup AVG (Consistency): <span class='driver-val'>{'+' if d['Lineup AVG']*mult > 0 else ''}{d['Lineup AVG']*mult:.1f}%</span>", unsafe_allow_html=True)
                     st.markdown(f"<div class='driver-detail'>Team Avgs: {data['h']['team_avg']:.3f} (H) vs {data['a']['team_avg']:.3f} (A)</div>", unsafe_allow_html=True)
-
                     st.markdown(f"* Lineup SLG (Power): <span class='driver-val'>{'+' if d['Lineup SLG']*mult > 0 else ''}{d['Lineup SLG']*mult:.1f}%</span>", unsafe_allow_html=True)
                     st.markdown(f"<div class='driver-detail'>Team Slugging: {data['h']['team_slg']:.3f} (H) vs {data['a']['team_slg']:.3f} (A)</div>", unsafe_allow_html=True)
 
@@ -195,27 +199,22 @@ for g in sorted_games:
                         st.markdown(f"<div class='pitcher-box'><b>SP:</b> {data[d_key]['p_name']} (ERA: {data[d_key]['p_era'] if data[d_key]['p_name'] != 'TBD Pitcher' else 'TBD'})</div>", unsafe_allow_html=True)
                         st.dataframe(pd.DataFrame(data[d_key]['lines']), use_container_width=True, hide_index=True)
                 
-                # --- FINAL BOX SCORE ---
                 if g.get('status') in ["Final", "Game Over"]:
                     st.divider()
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
                         try:
                             aw_stats, hm_stats = data['box']['away'].get('teamStats', {}), data['box']['home'].get('teamStats', {})
                             aw_r, hm_r = aw_stats.get('batting', {}).get('runs', 0), hm_stats.get('batting', {}).get('runs', 0)
-                            
                             df_bs = pd.DataFrame({
                                 "Team": [g['away_name'], g['home_name']],
                                 "Runs": [aw_r, hm_r],
                                 "Hits": [aw_stats.get('batting', {}).get('hits', 0), hm_stats.get('batting', {}).get('hits', 0)],
                                 "Errors": [aw_stats.get('fielding', {}).get('errors', 0), hm_stats.get('fielding', {}).get('errors', 0)]
                             })
-                            
                             def highlight_winner(row):
                                 is_win = row['Runs'] == max(aw_r, hm_r)
                                 return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
-                            
                             st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
                         except Exception as e: st.error(f"Could not load box score: {e}")
             else: st.info("Analysis unavailable for non-MLB matchups.")
         st.markdown('</div>', unsafe_allow_html=True)
-                            
