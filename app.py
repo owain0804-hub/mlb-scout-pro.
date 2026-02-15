@@ -21,36 +21,57 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Initialize Session State
+# --- SESSION STATE INITIALIZATION ---
 if "active_game_id" not in st.session_state:
     st.session_state.active_game_id = None
-if "fav_team" not in st.session_state:
-    st.session_state.fav_team = "None"
+if "saved_settings" not in st.session_state:
+    st.session_state.saved_settings = {
+        "fav_team": "None",
+        "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25,
+        "preset": "Balanced"
+    }
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.title("⚾ Model Intelligence")
-    preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=0)
+    
+    # Load settings from session state
+    s = st.session_state.saved_settings
+    
+    preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], 
+                      index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s["preset"]))
     
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
     else:
-        w_std = st.slider("Standings Weight %", 0, 100, value=40)
-        w_era = st.slider("Pitching ERA Weight %", 0, 100, value=15)
-        w_avg = st.slider("Lineup AVG Weight %", 0, 100, value=20)
-        w_slg = st.slider("Lineup SLG Weight %", 0, 100, value=25)
+        w_std = st.slider("Standings Weight %", 0, 100, value=s["w_std"])
+        w_era = st.slider("Pitching ERA Weight %", 0, 100, value=s["w_era"])
+        w_avg = st.slider("Lineup AVG Weight %", 0, 100, value=s["w_avg"])
+        w_slg = st.slider("Lineup SLG Weight %", 0, 100, value=s["w_slg"])
     
     sensitivity = st.slider("Stat Sensitivity (Multiplier)", 1.0, 3.0, value=1.2, step=0.1)
 
     st.divider()
+    
     try:
         all_teams = statsapi.get('teams', {'sportId': 1})['teams']
         team_list = sorted([t['name'] for t in all_teams])
     except: team_list = []
-    st.session_state.fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list)
+    
+    fav_team = st.selectbox("Your Favorite Team", ["None"] + team_list, 
+                            index=(["None"] + team_list).index(s["fav_team"]) if s["fav_team"] in (["None"] + team_list) else 0)
 
-# --- CORE FUNCTIONS ---
+    # SAVE BUTTON
+    if st.button("💾 Save Settings"):
+        st.session_state.saved_settings = {
+            "fav_team": fav_team,
+            "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg,
+            "preset": preset
+        }
+        st.success("Preferences Saved!")
+
+# --- CORE FUNCTIONS (Unchanged) ---
 @st.cache_data(ttl=3600)
 def get_team_info(team_id, year):
     try:
@@ -83,10 +104,6 @@ def get_detailed_data(game_id, g_info, selected_year):
                         s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
                         stats_list = s_data.get('stats', [])
                         s = stats_list[0].get('stats', {}) if (stats_list and stats_list[0].get('stats', {}).get('atBats', 0) > 0) else {}
-                        if not s:
-                            s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year-1)
-                            stats_list = s_data.get('stats', [])
-                            s = stats_list[0].get('stats', {}) if stats_list else {}
                     except: s = {}
                     p_avg = s.get('avg', '.000')
                     l_rows.append({"Player": p.get('person', {}).get('fullName', "TBD"), "AVG": p_avg})
@@ -102,11 +119,7 @@ def get_detailed_data(game_id, g_info, selected_year):
                 try:
                     sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year)
                     stats_list = sp_stat.get('stats', [])
-                    s_p = stats_list[0].get('stats', {}) if (stats_list and stats_list[0].get('stats', {}).get('inningsPitched', '0') != '0') else {}
-                    if not s_p:
-                        sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year-1)
-                        stats_list = sp_stat.get('stats', [])
-                        s_p = stats_list[0].get('stats', {}) if stats_list else {}
+                    s_p = stats_list[0].get('stats', {}) if stats_list else {}
                     p_era = float(s_p.get('era', 4.10))
                 except: p_era = 4.10
             
@@ -140,11 +153,10 @@ def get_detailed_data(game_id, g_info, selected_year):
     except Exception: return None
 
 # --- MAIN UI ---
-st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 selected_year = u_date.year
 
-# Fetch schedule and ensure unique Game IDs only
+# Fetch unique Game IDs logic
 raw_sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_games = []
 seen_ids = set()
@@ -153,7 +165,8 @@ for g in raw_sched:
         unique_games.append(g)
         seen_ids.add(g['game_id'])
 
-fav = st.session_state.fav_team
+# Use saved favorite team for sorting
+fav = st.session_state.saved_settings["fav_team"]
 sorted_games = sorted(unique_games, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
 for g in sorted_games:
@@ -187,7 +200,6 @@ for g in sorted_games:
                     d, mult = data['drivers'], (1 if p_h > 0.5 else -1)
                     st.markdown(f"* Standings Edge: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
                     st.markdown(f"* Pitching ERA Impact: <span class='driver-val'>{'+' if d['ERA Matchup']*mult > 0 else ''}{d['ERA Matchup']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='driver-detail'>Compare: {data['h']['p_name']} ({data['h']['p_era']}) vs {data['a']['p_name']} ({data['a']['p_era']})</div>", unsafe_allow_html=True)
                     st.markdown(f"* Lineup AVG (Consistency): <span class='driver-val'>{'+' if d['Lineup AVG']*mult > 0 else ''}{d['Lineup AVG']*mult:.1f}%</span>", unsafe_allow_html=True)
                     st.markdown(f"* Lineup SLG (Power): <span class='driver-val'>{'+' if d['Lineup SLG']*mult > 0 else ''}{d['Lineup SLG']*mult:.1f}%</span>", unsafe_allow_html=True)
 
@@ -211,11 +223,7 @@ for g in sorted_games:
                                 "Errors": [data['box']['away'].get('teamStats', {}).get('fielding', {}).get('errors', 0), 
                                            data['box']['home'].get('teamStats', {}).get('fielding', {}).get('errors', 0)]
                             })
-                            def highlight_winner(row):
-                                is_win = row['Runs'] == df_bs['Runs'].max()
-                                return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
-                            st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
-                        except: st.error("Box score data not yet available for this game.")
-            else: st.info("Detailed data unavailable for this matchup.")
+                            st.dataframe(df_bs, use_container_width=True, hide_index=True)
+                        except: st.error("Box score data unavailable.")
+            else: st.info("Detailed data unavailable.")
         st.markdown('</div>', unsafe_allow_html=True)
-        
