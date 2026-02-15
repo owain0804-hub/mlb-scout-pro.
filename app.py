@@ -52,19 +52,22 @@ with st.sidebar:
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
-def get_team_info(team_id):
+def get_team_info(team_id, year):
     try:
-        standings = statsapi.standings_data(leagueId="103,104")
+        # Fetch standings for the specific year chosen in the date picker
+        standings = statsapi.standings_data(leagueId="103,104", season=year)
         for div in standings.values():
             for t in div['teams']:
                 if t['team_id'] == team_id:
-                    record = f"{t.get('w', 0)}-{t.get('l', 0)}"
-                    wpct = int(t.get('w', 1)) / (max(1, int(t.get('w', 1)) + int(t.get('l', 1))))
+                    wins = t.get('w', 0)
+                    losses = t.get('l', 0)
+                    record = f"{wins}-{losses}"
+                    wpct = int(wins) / (max(1, int(wins) + int(losses)))
                     return record, wpct
         return "0-0", 0.500
     except: return "0-0", 0.500
 
-def get_detailed_data(game_id, g_info):
+def get_detailed_data(game_id, g_info, selected_year):
     try:
         box = statsapi.boxscore_data(game_id)
         def fetch_metrics(side, tid):
@@ -72,18 +75,19 @@ def get_detailed_data(game_id, g_info):
             l_names, avgs, slgs = [], [], []
             for pid in batters:
                 p = box[side]['players'][f"ID{pid}"]
-                s_data = statsapi.player_stat_data(pid, group="hitting", type="season")
+                # Fetch season stats based on the selected year
+                s_data = statsapi.player_stat_data(pid, group="hitting", type="season", season=selected_year)
                 s = s_data['stats'][0]['stats'] if s_data.get('stats') else {}
                 l_names.append(f"{p['person']['fullName']} ({p['stats']['batting'].get('hits',0)}/{p['stats']['batting'].get('atBats',0)})")
                 avgs.append(float(str(s.get('avg', '.250')).replace('.','0.')))
                 slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')))
             
             sp_id = box[side].get('pitchers', [None])[0]
-            sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season") if sp_id else {}
+            sp_stat = statsapi.player_stat_data(sp_id, group="pitching", type="season", season=selected_year) if sp_id else {}
             p_era = float(sp_stat['stats'][0]['stats'].get('era', 4.10)) if sp_stat.get('stats') else 4.10
             
-            _, wpct = get_team_info(tid)
-            # Standings 40, ERA 15, AVG 20, SLG 25
+            _, wpct = get_team_info(tid, selected_year)
+            # Weights: Standings 40, ERA 15, AVG 20, SLG 25
             score = (wpct * (w_std/100)) + ((4.1/p_era) * (w_era/100)) + \
                     (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
             
@@ -99,14 +103,17 @@ def get_detailed_data(game_id, g_info):
 # --- MAIN UI ---
 st.title("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
-games = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
+selected_year = u_date.year
+formatted_date = u_date.strftime("%m/%d/%Y")
+
+games = statsapi.schedule(date=formatted_date)
 sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['home_name'] != fav_team))
 
 for g in sorted_games:
     gid = g['game_id']
     is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
-    away_rec, _ = get_team_info(g['away_id'])
-    home_rec, _ = get_team_info(g['home_id'])
+    away_rec, _ = get_team_info(g['away_id'], selected_year)
+    home_rec, _ = get_team_info(g['home_id'], selected_year)
 
     with st.container():
         st.markdown(f"""<div class="matchup-card" style="border-left: 5px solid {'#FFD700' if is_fav else '#30363d'}">""", unsafe_allow_html=True)
@@ -115,12 +122,12 @@ for g in sorted_games:
         with cols[1]: 
             fav_html = '<span class="fav-tag">⭐ FAVORITE</span>' if is_fav else ''
             st.markdown(f"### {g['away_name']} <span class='record-text'>({away_rec})</span> @ {g['home_name']} <span class='record-text'>({home_rec})</span> {fav_html}", unsafe_allow_html=True)
-            st.caption(f"Status: {g['status']}")
+            st.caption(f"Status: {g['status']} | Season: {selected_year}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
         if st.session_state.active_game_id == gid:
-            data = get_detailed_data(gid, g)
+            data = get_detailed_data(gid, g, selected_year)
             if data:
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 winner = g['home_name'] if p_h > p_a else g['away_name']
@@ -131,8 +138,8 @@ for g in sorted_games:
                 for side, col, d, t_name in [('Away', col_a, data['a'], g['away_name']), ('Home', col_h, data['h'], g['home_name'])]:
                     with col:
                         st.markdown(f"**{t_name} Starter**")
-                        st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>Season ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
-                        st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
+                        st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>{selected_year} ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
+                        st.table(pd.DataFrame(d['names'], columns=[f"{selected_year} Lineup"]))
 
                 if g['status'] in ["Final", "Game Over", "Completed Early"]:
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
@@ -145,4 +152,4 @@ for g in sorted_games:
                         })
                         st.dataframe(df_box.style.apply(lambda r: ['background-color: #1d3521']*4 if (aw_r > hm_r and r.Team == g['away_name']) or (hm_r > aw_r and r.Team == g['home_name']) else ['']*4, axis=1), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
-                                 
+        
