@@ -40,13 +40,21 @@ def get_advanced_stats(player_id, group):
 @st.cache_data(ttl=300)
 def get_team_info(team_name):
     try:
-        standings = statsapi.standings_data(leagueId="103,104")
-        for div_id, division in standings.items():
-            for team in division['teams']:
-                if team['name'] == team_name:
-                    return {"id": team['id'], "div_id": div_id, "wpct": int(team.get('w',1))/(int(team.get('w',1))+int(team.get('l',1)))}
-        return {"id": 110, "div_id": None, "wpct": 0.500}
-    except: return {"id": 110, "div_id": None, "wpct": 0.500}
+        # Fetching all teams to find the specific ID and WPCT
+        all_teams = statsapi.get('teams', {'sportId': 1})['teams']
+        for team in all_teams:
+            if team['name'] == team_name:
+                tid = team['id']
+                # Get standings for WPCT
+                standings = statsapi.standings_data(leagueId="103,104")
+                wpct = 0.500
+                for div in standings.values():
+                    for t in div['teams']:
+                        if t['name'] == team_name:
+                            wpct = int(t.get('w',1))/(int(t.get('w',1))+int(t.get('l',1)))
+                return {"id": tid, "wpct": wpct}
+        return {"id": 110, "wpct": 0.500}
+    except: return {"id": 110, "wpct": 0.500}
 
 @st.cache_data(ttl=15)
 def get_detailed_data(game_id, game_info):
@@ -75,7 +83,9 @@ def get_detailed_data(game_id, game_info):
             
             adj_wpct = (t_info['wpct'] * (w_std/100)) + (l_avg * 4 * (w_avg/100)) + (l_slg * 2.5 * (w_slg/100)) + \
                        ((4.1/p_era) * (w_era/100)) + ((4.1/p_fip) * (w_fip/100)) + (bp_war * (w_bp/100))
-            return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": adj_wpct, "logo": f"https://www.mlbstatic.com/team-logos/{t_info['id']}.svg", "lineup": lineup_names, "l_avg": l_avg, "l_slg": l_slg, "bp_war": bp_war}
+            return {"name": game_info.get(f'{side}_probable_pitcher', "TBD"), "stats": sp_data, "wpct": adj_wpct, 
+                    "logo": f"https://www.mlbstatic.com/team-logos/{t_info['id']}.svg", "lineup": lineup_names, 
+                    "l_avg": l_avg, "l_slg": l_slg, "bp_war": bp_war, "t_name": team_name}
 
         a, h = get_strength_metrics('away', game_info['away_name']), get_strength_metrics('home', game_info['home_name'])
         prob_h = (h['wpct'] - (a['wpct'] * h['wpct'])) / (a['wpct'] + h['wpct'] - (2 * a['wpct'] * h['wpct'])) + 0.04
@@ -95,12 +105,15 @@ for g in games:
             if data:
                 p_h, p_a = data['prob_h']*100, (1-data['prob_h'])*100
                 st.markdown(f"""<div style="display:flex; justify-content:space-around; background:#111; padding:20px; border-radius:10px; border:1px solid #333; color:white; align-items:center;">
-                    <div style="text-align:center;"><img src="{data['a']['logo']}" width="65"><br>{g['away_name']}<br><b style="font-size:32px; color:#FF5252;">{p_a:.1f}%</b></div>
+                    <div style="text-align:center;"><img src="{data['a']['logo']}" width="75"><br>{g['away_name']}<br><b style="font-size:32px; color:#FF5252;">{p_a:.1f}%</b></div>
                     <div style="text-align:center; font-size:24px; opacity:0.5;">VS</div>
-                    <div style="text-align:center;"><img src="{data['h']['logo']}" width="65"><br>{g['home_name']}<br><b style="font-size:32px; color:#4CAF50;">{p_h:.1f}%</b></div>
+                    <div style="text-align:center;"><img src="{data['h']['logo']}" width="75"><br>{g['home_name']}<br><b style="font-size:32px; color:#4CAF50;">{p_h:.1f}%</b></div>
                 </div>""", unsafe_allow_html=True)
                 
-                st.info(f"💡 **AI Insight:** AVG/SLG: {data['a']['l_avg']:.3f}/{data['a']['l_slg']:.3f} vs {data['h']['l_avg']:.3f}/{data['h']['l_slg']:.3f} | Bullpen WAR: {data['a']['bp_war']:.2f} vs {data['h']['bp_war']:.2f}")
+                # SEPARATED TEXT BY TEAM
+                st.info(f"""💡 **AI Insight**
+                \n**{g['away_name']}**: AVG {data['a']['l_avg']:.3f} | SLG {data['a']['l_slg']:.3f} | Bullpen WAR {data['a']['bp_war']:.2f}
+                \n**{g['home_name']}**: AVG {data['h']['l_avg']:.3f} | SLG {data['h']['l_slg']:.3f} | Bullpen WAR {data['h']['bp_war']:.2f}""")
                 
                 c1, c2 = st.columns(2)
                 for col, key in zip([c1, c2], ['a', 'h']):
@@ -112,7 +125,6 @@ for g in games:
                 
                 st.subheader("📊 Box Score")
                 b, status = data['box'], g.get('status', 'Final')
-                # Safety checks for fielding errors to fix KeyError
                 aw_r = b['away']['teamStats']['batting'].get('runs', 0)
                 hm_r = b['home']['teamStats']['batting'].get('runs', 0)
                 aw_e = b['away']['teamStats'].get('fielding', {}).get('errors', 0)
@@ -125,7 +137,7 @@ for g in games:
                 def highlight_winner(row):
                     if "Final" in status and aw_r != hm_r:
                         winner = g['away_name'] if aw_r > hm_r else g['home_name']
-                        if row.Team == winner: return ['background-color: #2e7d32; color: white'] * len(row)
+                        if row.Team == winner: return ['background-color: #2e7d32; color: white; font-weight: bold'] * len(row)
                     return [''] * len(row)
                 st.table(box_df.style.apply(highlight_winner, axis=1))
-                
+                 
