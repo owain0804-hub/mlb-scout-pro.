@@ -17,6 +17,7 @@ st.markdown("""
     .pitcher-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px; text-align: center; margin-bottom: 5px; }
     .confidence-badge { font-size: 0.8em; padding: 2px 8px; border-radius: 10px; font-weight: bold; margin-left: 10px;}
     .driver-val { font-weight: bold; color: #4CAF50; }
+    .driver-detail { font-size: 0.85em; color: #8b949e; margin-left: 20px; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -71,7 +72,7 @@ def get_detailed_data(game_id, g_info, selected_year):
             l_rows, avgs, slgs = [], [], []
             
             if not batters:
-                l_rows = [{"Player": "TBD (Lineup not set)", "AVG": ".000"}] * 9
+                l_rows = [{"Player": "TBD", "AVG": ".000"}] * 9
                 avgs, slgs = [0.250]*9, [0.400]*9
             else:
                 for pid in batters[:9]:
@@ -109,9 +110,16 @@ def get_detailed_data(game_id, g_info, selected_year):
             
             _, wpct = get_team_info(tid, selected_year)
             std_part = wpct * (w_std/100)
-            p_part = (4.1/max(0.5, p_era)) * (w_era/100)
-            off_part = (sum(avgs)/9 * 4 * (w_avg/100)) + (sum(slgs)/9 * 2.5 * (w_slg/100))
-            return {"lines": l_rows, "p_name": p_name, "p_era": p_era, "total": std_part + p_part + off_part, "std": std_part, "pitch": p_part, "off": off_part}
+            era_part = (4.1/max(0.5, p_era)) * (w_era/100)
+            avg_part = (sum(avgs)/9 * 4 * (w_avg/100))
+            slg_part = (sum(slgs)/9 * 2.5 * (w_slg/100))
+            
+            return {
+                "lines": l_rows, "p_name": p_name, "p_era": p_era, 
+                "total": std_part + era_part + avg_part + slg_part, 
+                "std": std_part, "era_val": era_part, "avg_val": avg_part, "slg_val": slg_part,
+                "team_avg": sum(avgs)/9, "team_slg": sum(slgs)/9
+            }
 
         a_data = fetch_metrics('away', g_info['away_id'])
         h_data = fetch_metrics('home', g_info['home_id'])
@@ -122,8 +130,9 @@ def get_detailed_data(game_id, g_info, selected_year):
         
         drivers = {
             "Standings": (h_data['std'] - a_data['std']) * sensitivity * 10,
-            "Pitching": (h_data['pitch'] - a_data['pitch']) * sensitivity * 10,
-            "Offense": (h_data['off'] - a_data['off']) * sensitivity * 10
+            "ERA Matchup": (h_data['era_val'] - a_data['era_val']) * sensitivity * 10,
+            "Lineup AVG": (h_data['avg_val'] - a_data['avg_val']) * sensitivity * 10,
+            "Lineup SLG": (h_data['slg_val'] - a_data['slg_val']) * sensitivity * 10
         }
         return {"a": a_data, "h": h_data, "prob_h": max(0.01, min(0.99, prob_h)), "drivers": drivers, "box": box}
     except: return None
@@ -163,12 +172,21 @@ for g in sorted_games:
                 
                 st.markdown(f"""<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({win_pct*100:.1f}%) <span class="confidence-badge" style="background:{conf_color}; color:#000;">{conf} Confidence</span></div>""", unsafe_allow_html=True)
                 
-                with st.expander("📊 Why this prediction? (Drivers)"):
-                    st.write(f"Advantage Contribution for **{winner}**:")
+                # --- ENHANCED DRIVERS ---
+                with st.expander("📊 Why this prediction? (Detailed Drivers)"):
+                    st.write(f"Advantage breakdown for **{winner}**:")
                     d, mult = data['drivers'], (1 if p_h > 0.5 else -1)
-                    st.markdown(f"* Standings: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* Pitching: <span class='driver-val'>{'+' if d['Pitching']*mult > 0 else ''}{d['Pitching']*mult:.1f}%</span>", unsafe_allow_html=True)
-                    st.markdown(f"* Offense: <span class='driver-val'>{'+' if d['Offense']*mult > 0 else ''}{d['Offense']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    
+                    st.markdown(f"* Standings Edge: <span class='driver-val'>{'+' if d['Standings']*mult > 0 else ''}{d['Standings']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    
+                    st.markdown(f"* Pitching ERA Impact: <span class='driver-val'>{'+' if d['ERA Matchup']*mult > 0 else ''}{d['ERA Matchup']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='driver-detail'>Compare: {data['h']['p_name']} ({data['h']['p_era']}) vs {data['a']['p_name']} ({data['a']['p_era']})</div>", unsafe_allow_html=True)
+                    
+                    st.markdown(f"* Lineup AVG (Consistency): <span class='driver-val'>{'+' if d['Lineup AVG']*mult > 0 else ''}{d['Lineup AVG']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='driver-detail'>Team Avgs: {data['h']['team_avg']:.3f} (H) vs {data['a']['team_avg']:.3f} (A)</div>", unsafe_allow_html=True)
+
+                    st.markdown(f"* Lineup SLG (Power): <span class='driver-val'>{'+' if d['Lineup SLG']*mult > 0 else ''}{d['Lineup SLG']*mult:.1f}%</span>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='driver-detail'>Team Slugging: {data['h']['team_slg']:.3f} (H) vs {data['a']['team_slg']:.3f} (A)</div>", unsafe_allow_html=True)
 
                 l_col1, l_col2 = st.columns(2)
                 for col, d_key, t_name in [(l_col1, 'a', g['away_name']), (l_col2, 'h', g['home_name'])]:
@@ -182,12 +200,8 @@ for g in sorted_games:
                     st.divider()
                     if st.button("📊 View Final Box Score", key=f"box_{gid}"):
                         try:
-                            # Safe stat retrieval using nested .get() to prevent KeyErrors
-                            aw_stats = data['box']['away'].get('teamStats', {})
-                            hm_stats = data['box']['home'].get('teamStats', {})
-                            
-                            aw_r = aw_stats.get('batting', {}).get('runs', 0)
-                            hm_r = hm_stats.get('batting', {}).get('runs', 0)
+                            aw_stats, hm_stats = data['box']['away'].get('teamStats', {}), data['box']['home'].get('teamStats', {})
+                            aw_r, hm_r = aw_stats.get('batting', {}).get('runs', 0), hm_stats.get('batting', {}).get('runs', 0)
                             
                             df_bs = pd.DataFrame({
                                 "Team": [g['away_name'], g['home_name']],
@@ -201,8 +215,6 @@ for g in sorted_games:
                                 return ['background-color: #ffd70033; color: #FFD700; font-weight: bold' if is_win else '' for _ in row]
                             
                             st.dataframe(df_bs.style.apply(highlight_winner, axis=1), use_container_width=True, hide_index=True)
-                        except Exception as e:
-                            st.error(f"Could not load box score: {e}")
+                        except Exception as e: st.error(f"Could not load box score: {e}")
             else: st.info("Analysis unavailable for non-MLB matchups.")
         st.markdown('</div>', unsafe_allow_html=True)
-        
