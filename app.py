@@ -5,7 +5,7 @@ from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 
 # --- PAGE CONFIG & THEME ---
-st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
+st.set_page_config(page_title="MLB Scout Pro", layout="wide", page_icon="⚾")
 st_autorefresh(interval=30000, key="mlb_live_timer")
 
 # Custom CSS for UI
@@ -26,9 +26,9 @@ if "active_game_id" not in st.session_state:
 
 # --- RESET LOGIC ---
 def reset_weights():
-    st.session_state["slider_era"] = 40
+    st.session_state["slider_era"] = 30
     st.session_state["slider_avg"] = 30
-    st.session_state["slider_slg"] = 30
+    st.session_state["slider_slg"] = 40
 
 # --- SIDEBAR (Model Control) ---
 with st.sidebar:
@@ -50,7 +50,7 @@ with st.sidebar:
     # Probability Sliders (using session_state keys for resetting)
     w_era = st.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=40)
     w_avg = st.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=30)
-    w_slg = st.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=30)
+    w_slg = st.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=40)
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -125,7 +125,7 @@ for g in sorted_games:
                         st.markdown(f"""<div class="pitcher-box"><b>{d['p_name']}</b><br>ERA: {d['p_era']}</div>""", unsafe_allow_html=True)
                         st.table(pd.DataFrame(d['names'], columns=["Lineup"]))
 
-                if st.button("📊 Show Box Score", key=f"boxscore_{gid}"):
+                if st.button(" Box Score", key=f"boxscore_{gid}"):
                     b = data['box']
                     aw_r, hm_r = b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)
                     df_box = pd.DataFrame({
