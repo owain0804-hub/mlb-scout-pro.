@@ -15,7 +15,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .stButton>button:hover { border-color: #FFD700; color: #FFD700; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
-    .stat-box { background: #0d1117; border-radius: 10px; padding: 15px; border-left: 5px solid #58a6ff; }
+    .logo-container { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -47,12 +47,12 @@ with st.sidebar:
         reset_weights()
         st.rerun()
 
-    w_std = st.sidebar.slider("Standings Weight", 0, 100, key="slider_std", value=42)
-    w_era = st.sidebar.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=15)
-    w_fip = st.sidebar.slider("Pitcher FIP Weight", 0, 100, key="slider_fip", value=6)
-    w_avg = st.sidebar.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=11)
-    w_slg = st.sidebar.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=14)
-    w_bp = st.sidebar.slider("Bullpen WAR Weight", 0, 100, key="slider_bp", value=12)
+    w_std = st.slider("Standings Weight", 0, 100, key="slider_std", value=42)
+    w_era = st.slider("Pitcher ERA Weight", 0, 100, key="slider_era", value=15)
+    w_fip = st.slider("Pitcher FIP Weight", 0, 100, key="slider_fip", value=6)
+    w_avg = st.slider("Lineup AVG Weight", 0, 100, key="slider_avg", value=11)
+    w_slg = st.slider("Lineup SLG Weight", 0, 100, key="slider_slg", value=14)
+    w_bp = st.slider("Bullpen WAR Weight", 0, 100, key="slider_bp", value=12)
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -101,7 +101,6 @@ def get_detailed_data(game_id, g_info):
             sp_id = box[side].get('pitchers', [None])[0]
             sp_stat = get_advanced_stats(sp_id, "pitching") if sp_id else {}
             p_era, p_fip = float(sp_stat.get('era', 4.10)), float(sp_stat.get('fip', 4.10))
-            
             wpct = get_wpct(tid)
             bp_war = get_bullpen_war(tid)
             
@@ -118,8 +117,8 @@ def get_detailed_data(game_id, g_info):
 
 # --- MAIN UI ---
 st.title("⚾ MLB Intelligence Pro")
-c1, c2 = st.columns([2, 5])
-with c1:
+c_date, c_spacer = st.columns([2, 5])
+with c_date:
     u_date = st.date_input("Select Date", datetime.now())
     formatted_date = u_date.strftime("%m/%d/%Y")
 
@@ -129,14 +128,16 @@ sorted_games = sorted(games, key=lambda x: (x['away_name'] != fav_team and x['ho
 for g in sorted_games:
     gid = g['game_id']
     is_fav = (g['away_name'] == fav_team or g['home_name'] == fav_team)
+    away_logo = f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg"
+    home_logo = f"https://www.mlbstatic.com/team-logos/{g['home_id']}.svg"
     
     with st.container():
         st.markdown(f"""<div class="matchup-card" style="border-left: 5px solid {'#FFD700' if is_fav else '#30363d'}">""", unsafe_allow_html=True)
         cols = st.columns([1, 3, 1])
-        with cols[0]: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=60)
+        with cols[0]: st.image(away_logo, width=70)
         with cols[1]: 
             st.subheader(f"{g['away_name']} @ {g['home_name']}")
-            st.caption(f"Venue: {g.get('venue_name', 'TBD')} | Status: {g.get('status', 'Scheduled')}")
+            st.caption(f"🏟️ {g.get('venue_name', 'TBD')} | 🕒 {g.get('game_datetime', 'TBD')}")
         with cols[2]: 
             if st.button("Analyze", key=f"btn_{gid}"): st.session_state.active_game_id = gid
         
@@ -145,23 +146,29 @@ for g in sorted_games:
             if data:
                 p_h, p_a = data['prob_h'], 1 - data['prob_h']
                 st.write("---")
-                st.write("### 🎯 Win Probability")
-                st.progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% vs {g['away_name']} {p_a*100:.1f}%")
+                
+                # Logos + Win Probability Bar
+                prob_cols = st.columns([1, 8, 1])
+                prob_cols[0].image(away_logo, width=50)
+                prob_cols[1].progress(p_h, text=f"{g['home_name']} {p_h*100:.1f}% Win Probability")
+                prob_cols[2].image(home_logo, width=50)
                 
                 tab1, tab2 = st.tabs(["📋 Scouting Report", "📊 Box Score"])
                 with tab1:
-                    st.info(f"**AI Insight:** Today's matchup favors the **{g['home_name'] if p_h > p_a else g['away_name']}**.")
                     col_a, col_h = st.columns(2)
-                    col_a.write(f"**{g['away_name']} Lineup**")
-                    col_a.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
-                    col_h.write(f"**{g['home_name']} Lineup**")
-                    col_h.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
+                    with col_a:
+                        st.markdown(f"#### <img src='{away_logo}' width='30'> {g['away_name']}", unsafe_allow_html=True)
+                        st.table(pd.DataFrame(data['a']['names'], columns=["Starters"]))
+                    with col_h:
+                        st.markdown(f"#### <img src='{home_logo}' width='30'> {g['home_name']}", unsafe_allow_html=True)
+                        st.table(pd.DataFrame(data['h']['names'], columns=["Starters"]))
                 with tab2:
                     b = data['box']
                     box_df = pd.DataFrame({
                         "Team": [g['away_name'], g['home_name']],
                         "Runs": [b['away']['teamStats']['batting'].get('runs', 0), b['home']['teamStats']['batting'].get('runs', 0)],
-                        "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)]
+                        "Hits": [b['away']['teamStats']['batting'].get('hits', 0), b['home']['teamStats']['batting'].get('hits', 0)],
+                        "Errors": [b['away']['teamStats']['fielding'].get('errors', 0), b['home']['teamStats']['fielding'].get('errors', 0)]
                     })
                     st.table(box_df)
         st.markdown("</div>", unsafe_allow_html=True)
