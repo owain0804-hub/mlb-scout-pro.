@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pd
+import pandas as pd  # FIXED: Corrected import from 'pd' to 'pandas as pd'
 import json
 import os
 import hashlib
@@ -23,12 +23,17 @@ def apply_pro_styles():
         </style>
     """, unsafe_allow_html=True)
 
-# --- PERSISTENCE ---
+# --- PERSISTENCE & AUTO-REPAIR ---
 USERS_FILE = "users_db.json"
 def load_users():
     if os.path.exists(USERS_FILE):
         try:
-            with open(USERS_FILE, 'r') as f: return json.load(f)
+            users = json.load(f)
+            # REPAIR LOGIC: Ensure all users have 5 weights and valid structure
+            for u in users:
+                if "weights" in users[u] and len(users[u]["weights"]) < 5:
+                    users[u]["weights"] = [25, 25, 15, 20, 15]
+            return users
         except: return {}
     return {}
 
@@ -49,28 +54,32 @@ saved_user = cookie_manager.get(cookie="mlb_login")
 if not st.session_state.auth and saved_user and saved_user in users_db:
     st.session_state.auth, st.session_state.username = True, saved_user
 
-# --- LOGIN ---
+# --- LOGIN (FIXED KEYERROR) ---
 if not st.session_state.auth:
     st.title("⚾ MLB Scout Pro")
     t1, t2 = st.tabs(["Login", "Register"])
     with t1:
         u, p = st.text_input("Username"), st.text_input("Password", type="password")
         if st.button("Enter"):
+            # FIXED: Safer dictionary access to prevent KeyError
             if u in users_db and users_db[u].get('pw') == hash_pw(p):
                 st.session_state.auth, st.session_state.username = True, u
                 cookie_manager.set("mlb_login", u, expires_at=datetime(2026, 12, 31))
                 st.rerun()
+            else: st.error("Incorrect Username or Password.")
     with t2:
         nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
         if st.button("Create Account") and nu and np:
             users_db[nu] = {"pw": hash_pw(np), "fav": "None", "weights": [25, 25, 15, 20, 15], "display_model": 1}
-            save_users(users_db); st.success("Ready! Please Login.")
+            save_users(users_db); st.success("Account Created! Please Login.")
     st.stop()
 
-# --- SIDEBAR & DATA VALIDATION ---
+# --- SIDEBAR & DATA VALIDATION (FIXED INDEXERROR) ---
 user_data = users_db.get(st.session_state.username, {})
 weights_list = user_data.get("weights", [25, 25, 15, 20, 15])
-if len(weights_list) < 5: weights_list = [25, 25, 15, 20, 15]
+# Ensure we have exactly 5 weights for the 5 sliders
+if len(weights_list) != 5:
+    weights_list = [25, 25, 15, 20, 15]
 
 with st.sidebar:
     st.write(f"User: **{st.session_state.username}**")
@@ -132,7 +141,6 @@ def analyze_game(gid, g_info, year, weights):
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
-    # Calculate Model 1 Impacts
     imp1 = {
         "Win %": (h['wpct'] - a['wpct']) * 0.25,
         "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * 0.25,
@@ -142,7 +150,6 @@ def analyze_game(gid, g_info, year, weights):
     }
     p1 = 0.5 + sum(imp1.values()) + 0.02
     
-    # Calculate Model 2 Impacts
     uw = [v/100 for v in weights]
     imp2 = {
         "Win %": (h['wpct'] - a['wpct']) * uw[0],
@@ -174,11 +181,10 @@ for g in sorted_sched:
         st.write("### 🧠 AI Logic Breakdown")
         with st.container():
             st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
-            for category, impact in active_imps.items():
-                edge_team = g['home_name'] if impact > 0 else g['away_name']
-                color = "#4ade80" if edge_team == g['home_name'] else "#3b82f6"
-                impact_pct = abs(impact) * 100
-                st.markdown(f"**{category}:** <span style='color:{color}'>{edge_team} Edge</span> <span class='impact-tag'>(+{impact_pct:.1f}% to Win Prob)</span>", unsafe_allow_html=True)
+            for cat, imp in active_imps.items():
+                team_edge = g['home_name'] if imp > 0 else g['away_name']
+                color = "#4ade80" if team_edge == g['home_name'] else "#3b82f6"
+                st.markdown(f"**{cat}:** <span style='color:{color}'>{team_edge} Edge</span> <span class='impact-tag'>(+{abs(imp)*100:.1f}% to Win Prob)</span>", unsafe_allow_html=True)
             st.write(f"*Includes +2.0% Home Edge for {g['home_name']}.*")
             st.markdown('</div>', unsafe_allow_html=True)
         
