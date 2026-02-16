@@ -51,7 +51,7 @@ if not st.session_state.auth and saved_user and saved_user in users_db:
 
 # --- LOGIN ---
 if not st.session_state.auth:
-    st.title("⚾ MLB Scout Pro")
+    st.title("MLB Scout Pro")
     t1, t2 = st.tabs(["Login", "Register"])
     with t1:
         u, p = st.text_input("Username"), st.text_input("Password", type="password")
@@ -88,7 +88,7 @@ with st.sidebar:
     fav_idx = (["None"] + all_teams).index(fav_team_val) if fav_team_val in (["None"] + all_teams) else 0
     fav = st.selectbox("Favorite Team", ["None"] + all_teams, index=fav_idx)
     st.divider()
-    st.write("### 🎚️ Model 2 Weights")
+    st.write("### Model 2 Weights")
     w_win = st.slider("Win %", 0, 100, weights_list[0])
     w_era = st.slider("Starter ERA", 0, 100, weights_list[1])
     w_bp = st.slider("Bullpen ERA", 0, 100, weights_list[2])
@@ -170,7 +170,7 @@ for g in sorted_sched:
         res = g['home_name'] if p_val > 0.5 else g['away_name']
         st.markdown(f'<div class="mobile-row"><div class="{"metric-box" if sel_m==1 else "metric-box-2"}"><small>PROBABILITY {sel_m}</small><br><b>{max(p_val, 1-p_val)*100:.1f}%</b> <span style="color:#4ade80">{res}</span></div></div>', unsafe_allow_html=True)
         
-        st.write("### 🧠 AI Logic Breakdown")
+        st.write("### AI Logic Breakdown")
         h, a = data['home'], data['away']
         def get_edge(hv, av, low=False): return g['home_name'] if (hv < av if low else hv > av) else g['away_name']
         edges = {"Win %": get_edge(h['wpct'], a['wpct']), "Starter (ERA)": get_edge(h['era'], a['era'], True), "Bullpen (Relief ERA)": get_edge(h['bp_era'], a['bp_era'], True), "Hitting (AVG)": get_edge(h['avg'], a['avg']), "Power (SLG)": get_edge(h['slg'], a['slg'])}
@@ -180,7 +180,7 @@ for g in sorted_sched:
                 st.write(f"**{c}:** <span style='color:{"#4ade80" if t == g["home_name"] else "#3b82f6"}'>{t} Edge</span>", unsafe_allow_html=True)
             st.write(f"*Includes +2% Home Edge for {g['home_name']}.*"); st.markdown('</div>', unsafe_allow_html=True)
         
-        st.write("### 🏟️ Live Score")
+        st.write("### LiveScore")
         st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
         c1, c2 = st.columns(2)
         with c1:
