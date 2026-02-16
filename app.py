@@ -131,7 +131,6 @@ user_data = users_db.get(st.session_state.username, {})
 with st.sidebar:
     st.write(f"Logged in as: **{st.session_state.username}**")
     
-    # Model Selection Toggle
     current_model = user_data.get("display_model", 1)
     selected_model = st.radio("Select Probability Model", [1, 2], index=0 if current_model == 1 else 1, help="Model 1 uses Standard logic. Model 2 uses your Custom Weights below.")
     
@@ -201,14 +200,16 @@ def analyze_game(gid, g_info, year, weights):
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
+    # Prob 1 with 2% Home Bonus
     s1_h = (h['wpct']*0.3) + ((4.5/max(0.1, h['era']))*0.3) + (h['avg']*2.0) + (h['slg']*1.5)
     s1_a = (a['wpct']*0.3) + ((4.5/max(0.1, a['era']))*0.3) + (a['avg']*2.0) + (a['slg']*1.5)
-    prob1 = 0.5 + (s1_h - s1_a) + 0.03
+    prob1 = 0.5 + (s1_h - s1_a) + 0.02
     
+    # Prob 2 with 2% Home Bonus
     u_win, u_era, u_avg, u_slg = weights[0]/100, weights[1]/100, weights[2]/100, weights[3]/100
     s2_h = (h['wpct']*u_win) + ((4.5/max(0.1, h['era']))*u_era) + (h['avg']*(u_avg*10)) + (h['slg']*(u_slg*7.5))
     s2_a = (a['wpct']*u_win) + ((4.5/max(0.1, a['era']))*u_era) + (a['avg']*(u_avg*10)) + (a['slg']*(u_slg*7.5))
-    prob2 = 0.5 + (s2_h - s2_a) + 0.03
+    prob2 = 0.5 + (s2_h - s2_a) + 0.02
 
     return {"prob1": max(0.01, min(0.99, prob1)), "prob2": max(0.01, min(0.99, prob2)), "away": a, "home": h}
 
@@ -237,7 +238,6 @@ for g in sorted_sched:
         if st.button("Analyze", key=g['game_id'], use_container_width=True):
             data = analyze_game(g['game_id'], g, dt.year, user_weights)
             
-            # --- UPDATED: DYNAMIC PROBABILITY DISPLAY ---
             if user_model_choice == 1:
                 res1 = g['home_name'] if data['prob1'] > 0.5 else g['away_name']
                 st.markdown(f'<div class="mobile-row"><div class="metric-box"><small>PROBABILITY 1 (Standard)</small><br><b>{max(data["prob1"], 1-data["prob1"])*100:.1f}%</b> <span style="color:#4ade80">{res1}</span></div></div>', unsafe_allow_html=True)
@@ -245,7 +245,6 @@ for g in sorted_sched:
                 res2 = g['home_name'] if data['prob2'] > 0.5 else g['away_name']
                 st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>PROBABILITY 2 (Custom)</small><br><b>{max(data["prob2"], 1-data["prob2"])*100:.1f}%</b> <span style="color:#a78bfa">{res2}</span></div></div>', unsafe_allow_html=True)
 
-            # AI Logic Breakdown
             st.write("### 🧠 AI Logic Breakdown")
             h, a = data['home'], data['away']
             def get_edge(h_val, a_val, lower_better=False):
@@ -259,10 +258,9 @@ for g in sorted_sched:
                 for cat, team in edges.items():
                     color = "#4ade80" if team == g['home_name'] else "#3b82f6"
                     st.write(f"**{cat}:** <span style='color:{color}'>{team} Edge</span>", unsafe_allow_html=True)
-                st.write(f"*Includes +3% Home Field Advantage for {g['home_name']}.*")
+                st.write(f"*Includes +2% Home Field Advantage for {g['home_name']}.*")
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            # Live Score & Lineups
             st.write("### 🏟️ Live Score")
             st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
 
@@ -273,4 +271,3 @@ for g in sorted_sched:
             with c2:
                 st.markdown(f"""<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g['home_id']}.svg" width="20"> {data['home']['p']} (ERA: {data['home']['era']})</div>""", unsafe_allow_html=True)
                 st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-    
