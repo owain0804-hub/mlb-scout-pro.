@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pandas as pd
+import pd
 import json
 import os
 import hashlib
@@ -12,14 +12,14 @@ from streamlit_autorefresh import st_autorefresh
 # --- EMAIL CONFIGURATION ---
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
-SENDER_EMAIL = "your-email@gmail.com" 
-SENDER_PASSWORD = "your-app-password" 
-ADMIN_EMAIL = "your-receiving-email@gmail.com"
+SENDER_EMAIL = "owainbaseball@gmail.com" 
+SENDER_PASSWORD = "YOUR_16_DIGIT_APP_PASSWORD" # <--- Generate this in Google Account Settings
+ADMIN_EMAIL = "owainbaseball@gmail.com"
 
 def send_admin_notification(new_user):
     try:
         subject = f"⚾ New Account Alert: {new_user}"
-        body = f"A new user has registered: {new_user}\nTime: {datetime.now()}"
+        body = f"A new user has registered: {new_user}\nTime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         msg = MIMEText(body)
         msg['Subject'] = subject
         msg['From'] = SENDER_EMAIL
@@ -28,7 +28,8 @@ def send_admin_notification(new_user):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-    except: pass
+    except Exception as e:
+        st.warning(f"Note: Account created, but email notification failed. Check App Password.")
 
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
@@ -46,7 +47,7 @@ st.markdown("""
 # --- SESSION & STORAGE ---
 SESSION_FILE = "active_session.json"
 def hash_password(password): return hashlib.sha256(str.encode(password)).hexdigest()
-def get_user_file(username): return f"profile_{"".join(x for x in username if x.isalnum())}.json"
+def get_user_file(username): return f"profile_{''.join(x for x in username if x.isalnum())}.json"
 
 def save_settings(username, password, settings_data):
     with open(get_user_file(username), "w") as f:
@@ -105,14 +106,13 @@ if not st.session_state.authenticated:
                 send_admin_notification(nu); st.success("Created!")
     st.stop()
 
-# --- SIDEBAR (Settings & Favorites) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("⚾ Settings")
     if st.button("Log Out"): manage_persistent_session(action="logout"); st.session_state.authenticated = False; st.rerun()
     st.divider()
     s = st.session_state.saved_settings
     
-    # Presets
     preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
@@ -124,13 +124,11 @@ with st.sidebar:
         w_slg = st.slider("Lineup SLG %", 0, 100, s["w_slg"])
     sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
     
-    # Favorite Team Selector
     try: all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
     except: all_teams = []
     fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, 
                             index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
 
-    # Save Button
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
         save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
@@ -206,12 +204,10 @@ for g in sorted_games:
         if st.session_state.get("active_game_id") == g['game_id']:
             data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
             if data:
-                # Winner Projection
                 res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
                 conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                 st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                 
-                # Model Breakdown
                 with st.expander("📊 Percentage Contribution by Stat"):
                     h, a = data['home'], data['away']
                     total_h = h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg']
@@ -224,7 +220,6 @@ for g in sorted_games:
                     ])
                     st.table(impact_df)
 
-                # BOX SCORE with Highlighted Winner
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
@@ -245,7 +240,6 @@ for g in sorted_games:
 
                     st.dataframe(box_df.style.apply(highlight_winner, axis=1), hide_index=True, use_container_width=True)
 
-                # Lineups & Pitchers
                 st.write("### 📋 Lineups")
                 la, lh = st.columns(2)
                 with la:
@@ -258,4 +252,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-    
+        
