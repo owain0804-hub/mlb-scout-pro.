@@ -5,7 +5,6 @@ import json
 import os
 import hashlib
 import smtplib
-import altair as alt
 from email.mime.text import MIMEText
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
@@ -41,7 +40,6 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
-    .stat-header { color: #8b949e; font-size: 0.85em; text-transform: uppercase; letter-spacing: 1px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -107,13 +105,15 @@ if not st.session_state.authenticated:
                 send_admin_notification(nu); st.success("Created!")
     st.stop()
 
-# --- SIDEBAR ---
+# --- SIDEBAR (Settings & Favorites) ---
 with st.sidebar:
-    st.title("⚾ Model Weights")
+    st.title("⚾ Settings")
     if st.button("Log Out"): manage_persistent_session(action="logout"); st.session_state.authenticated = False; st.rerun()
     st.divider()
     s = st.session_state.saved_settings
-    preset = st.radio("Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
+    
+    # Presets
+    preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -123,6 +123,19 @@ with st.sidebar:
         w_avg = st.slider("Lineup AVG %", 0, 100, s["w_avg"])
         w_slg = st.slider("Lineup SLG %", 0, 100, s["w_slg"])
     sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
+    
+    # Favorite Team Selector
+    try: all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
+    except: all_teams = []
+    fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, 
+                            index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
+
+    # Save Button
+    if st.button("💾 Save Preferences"):
+        new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
+        save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
+        st.session_state.saved_settings = new_settings
+        st.success("Preferences Saved!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -157,13 +170,10 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
                 except: pass
             
             wpct = get_team_info(tid, year)
-            
-            # Category Contributions
             c_std = wpct * (w_std/100)
             c_era = (4.1/max(0.1,era)) * (w_era/100)
             c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
             c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
-            
             return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg}
 
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
@@ -177,7 +187,11 @@ u_date = st.date_input("Date", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_g = {g['game_id']: g for g in sched}.values()
 
-for g in unique_g:
+# Sort games so favorite team is at the top
+fav = st.session_state.saved_settings.get("fav_team", "None")
+sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
+
+for g in sorted_games:
     with st.container():
         st.markdown('<div class="matchup-card">', unsafe_allow_html=True)
         c1, c2, c3 = st.columns([1, 4, 1.5])
@@ -189,16 +203,16 @@ for g in unique_g:
         if st.session_state.get("active_game_id") == g['game_id']:
             data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
             if data:
+                # Winner Projection
                 res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
                 conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                 st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                 
+                # Model Breakdown
                 with st.expander("📊 Percentage Contribution by Stat"):
                     h, a = data['home'], data['away']
-                    # Calculate relative percentage contribution for the UI
                     total_h = h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg']
                     total_a = a['c_std'] + a['c_era'] + a['c_avg'] + a['c_slg']
-                    
                     impact_df = pd.DataFrame([
                         {"Stat": "Standings", g['home_name']: f"{(h['c_std']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_std']/total_a)*100:.1f}%"},
                         {"Stat": "Pitching", g['home_name']: f"{(h['c_era']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_era']/total_a)*100:.1f}%"},
@@ -206,9 +220,32 @@ for g in unique_g:
                         {"Stat": "Slugging", g['home_name']: f"{(h['c_slg']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_slg']/total_a)*100:.1f}%"},
                     ])
                     st.table(impact_df)
-                    st.caption("Each percentage represents how much that specific stat category contributed to that team's total model score.")
 
-                # Keep Lineups
+                # BOX SCORE with Highlighted Winner
+                if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
+                    st.write("### 📊 Box Score")
+                    r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
+                    box_df = pd.DataFrame({
+                        "Team": [g['away_name'], g['home_name']],
+                        "R": [r_a, r_h],
+                        "H": [data['box'].get('away',{}).get('teamStats',{}).get('batting',{}).get('hits','-'), data['box'].get('home',{}).get('teamStats',{}).get('batting',{}).get('hits','-')],
+                        "E": [data['box'].get('away',{}).get('teamStats',{}).get('fielding',{}).get('errors','-'), data['box'].get('home',{}).get('teamStats',{}).get('fielding',{}).get('errors','-')]
+                    })
+                    
+                    # Logic to highlight the winning team
+                    def highlight_winner(row):
+                        styles = [''] * len(row)
+                        # If Away is winning/won
+                        if r_a > r_h and row['Team'] == g['away_name']:
+                            styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
+                        # If Home is winning/won
+                        elif r_h > r_a and row['Team'] == g['home_name']:
+                            styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
+                        return styles
+
+                    st.dataframe(box_df.style.apply(highlight_winner, axis=1), hide_index=True, use_container_width=True)
+
+                # Lineups
                 st.write("### 📋 Lineups")
                 la, lh = st.columns(2)
                 with la:
@@ -219,4 +256,4 @@ for g in unique_g:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-        
+            
