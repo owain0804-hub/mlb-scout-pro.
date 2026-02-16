@@ -53,6 +53,8 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
+if "user_pwd" not in st.session_state: # Fixed: Store password for saving later
+    st.session_state.user_pwd = None
 
 # --- SIDEBAR (Login/Create Account) ---
 with st.sidebar:
@@ -61,37 +63,39 @@ with st.sidebar:
     if not st.session_state.authenticated:
         mode = st.radio("Access Mode", ["Login", "Create Account"])
         user_id = st.text_input("Profile Name")
-        pwd = st.text_input("Password", type="password")
+        input_pwd = st.text_input("Password", type="password")
         
         if mode == "Login":
             if st.button("Log In"):
-                settings, success = load_settings(user_id, pwd)
+                settings, success = load_settings(user_id, input_pwd)
                 if success:
                     st.session_state.authenticated = True
                     st.session_state.current_user = user_id
+                    st.session_state.user_pwd = input_pwd # Remembered for saving
                     st.session_state.saved_settings = settings
                     st.rerun()
                 elif success is False:
                     st.error("❌ Incorrect password.")
                 else:
-                    st.error("❌ Profile not found. Please Create Account.")
+                    st.error("❌ Profile not found.")
         else:
             if st.button("Create Account"):
-                if user_id and pwd:
+                if user_id and input_pwd:
                     if os.path.exists(get_user_file(user_id)):
-                        st.warning("⚠️ Profile already exists. Try Login.")
+                        st.warning("⚠️ Profile already exists.")
                     else:
                         initial_settings = {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"}
-                        save_settings(user_id, pwd, initial_settings)
-                        st.success("✅ Account Created! Please switch to Login.")
+                        save_settings(user_id, input_pwd, initial_settings)
+                        st.success("✅ Account Created! Now switch to Login.")
                 else:
-                    st.error("Please enter both Name and Password.")
+                    st.error("Enter Name and Password.")
         st.stop()
 
     # Logged In Sidebar View
-    st.write(f"Logged in as: **{st.session_state.current_user}**")
+    st.write(f"Logged in: **{st.session_state.current_user}**")
     if st.button("Log Out"):
         st.session_state.authenticated = False
+        st.session_state.user_pwd = None
         st.rerun()
     
     st.divider()
@@ -119,9 +123,10 @@ with st.sidebar:
 
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
-        save_settings(st.session_state.current_user, pwd, new_settings)
+        # Fixed NameError by using session_state.user_pwd
+        save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
         st.session_state.saved_settings = new_settings
-        st.success("Preferences Saved!")
+        st.success("Preferences Saved Professionally!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -148,16 +153,15 @@ def get_detailed_data(game_id, g_info, year, w_std, w_era, w_avg, w_slg, sensiti
             avgs, slgs = [], []
             for pid in batters[:9]:
                 p_info = players.get(f"ID{pid}", {}).get('person', {})
-                name = p_info.get('fullName', "TBD")
                 try:
                     p_stat = statsapi.player_stat_data(pid, group="hitting", type="season", season=year)
                     s = p_stat['stats'][0]['stats'] if p_stat.get('stats') else {}
                     avg_v = s.get('avg', '.000')
-                    lineup.append({"Player": name, "AVG": avg_v})
+                    lineup.append({"Player": p_info.get('fullName', "TBD"), "AVG": avg_v})
                     avgs.append(float(str(avg_v).replace('.','0.')))
                     slgs.append(float(str(s.get('slg', '.400')).replace('.','0.')))
                 except:
-                    lineup.append({"Player": name, "AVG": ".250"})
+                    lineup.append({"Player": p_info.get('fullName', "TBD"), "AVG": ".250"})
                     avgs.append(0.250); slgs.append(0.400)
             p_list = side_data.get('pitchers', [])
             p_name, era = "TBD", 4.10
@@ -171,10 +175,10 @@ def get_detailed_data(game_id, g_info, year, w_std, w_era, w_avg, w_slg, sensiti
             score = (wpct*(w_std/100)) + ((4.1/max(0.1,era))*(w_era/100)) + ((sum(avgs)/max(1,len(avgs))*4)*(w_avg/100)) + ((sum(slgs)/max(1,len(slgs))*2.5)*(w_slg/100))
             return {"score": score, "lineup": lineup, "p_name": p_name, "era": era}
 
-        away = fetch_side_data('away', g_info['away_id'])
-        home = fetch_side_data('home', g_info['home_id'])
-        prob_h = 0.5 + ((home['score'] - away['score']) * sensitivity / max(0.1, (home['score'] + away['score'])/2)) + 0.03 
-        return {"prob_h": max(0.01, min(0.99, prob_h)), "box": box, "away": away, "home": home}
+        a_data = fetch_side_data('away', g_info['away_id'])
+        h_data = fetch_side_data('home', g_info['home_id'])
+        prob_h = 0.5 + ((h_data['score'] - a_data['score']) * sensitivity / max(0.1, (h_data['score'] + a_data['score'])/2)) + 0.03 
+        return {"prob_h": max(0.01, min(0.99, prob_h)), "box": box, "away": a_data, "home": h_data}
     except: return None
 
 # --- MAIN UI ---
@@ -210,18 +214,17 @@ for g in sorted_games:
                 st.markdown(f'<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>', unsafe_allow_html=True)
                 
                 # --- LINEUPS ---
-                st.markdown("### 📋 Lineups & Pitching")
                 col_a, col_h = st.columns(2)
                 with col_a:
                     st.write(f"**{g['away_name']}**")
-                    st.caption(f"SP: {data['away']['p_name']} (ERA: {data['away']['era']})")
+                    st.caption(f"SP: {data['away']['p_name']} ({data['away']['era']})")
                     st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
                 with col_h:
                     st.write(f"**{g['home_name']}**")
-                    st.caption(f"SP: {data['home']['p_name']} (ERA: {data['home']['era']})")
+                    st.caption(f"SP: {data['home']['p_name']} ({data['home']['era']})")
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
 
-                # --- BOX SCORE ---
+                # --- BOX SCORE (Always appears if game is final or live) ---
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.markdown("### 📊 Box Score")
                     b = data['box']
@@ -233,7 +236,7 @@ for g in sorted_games:
                             "E": [b['away']['teamStats']['fielding'].get('errors', 0), b['home']['teamStats']['fielding'].get('errors', 0)]
                         })
                         st.dataframe(box_df, use_container_width=True, hide_index=True)
-                    except: st.caption("Box score data updating...")
-            else: st.info("Detailed data not available.")
+                    except: st.caption("Waiting for score data...")
+            else: st.info("Loading detailed data...")
         st.markdown('</div>', unsafe_allow_html=True)
-        
+                    
