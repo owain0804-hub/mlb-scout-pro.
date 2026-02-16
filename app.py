@@ -35,6 +35,14 @@ def apply_pro_styles():
             flex: 1;
             text-align: center;
         }
+        .analysis-box {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
         .matchup-card {
             background: #0d1117;
             border: 1px solid #30363d;
@@ -161,7 +169,6 @@ def analyze_game(gid, g_info, year, weights):
     def process(side, tid):
         sd = box.get(side, {})
         ps = sd.get('players', {})
-        # FIXED: Only pull players with battingOrder ending in '00' (Starters)
         starters = [p for p in ps.values() if p.get('battingOrder') and p['battingOrder'].endswith('00')]
         starters.sort(key=lambda x: x['battingOrder'])
         
@@ -170,16 +177,10 @@ def analyze_game(gid, g_info, year, weights):
         for p in starters:
             try:
                 st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="season")['stats'][0]['stats']
-                lineup.append({
-                    "Order": int(p['battingOrder'][0]), 
-                    "Player": p['person']['fullName'], 
-                    "AVG": st_data.get('avg', '.250'), 
-                    "SLG": st_data.get('slg', '.400')
-                })
+                lineup.append({"Order": int(p['battingOrder'][0]), "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
                 avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
                 slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
-            except: 
-                avgs.append(0.25); slgs.append(0.40)
+            except: avgs.append(0.25); slgs.append(0.40)
         
         p_name, era = "TBD", 4.50
         if sd.get('pitchers'):
@@ -227,14 +228,39 @@ for g in sorted_sched:
         if st.button("Analyze", key=g['game_id'], use_container_width=True):
             data = analyze_game(g['game_id'], g, dt.year, user_weights)
             
-            st.write("### 🏟️ Live Score")
-            st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
-            
+            # PROBABILITY BOXES
             res1 = g['home_name'] if data['prob1'] > 0.5 else g['away_name']
             res2 = g['home_name'] if data['prob2'] > 0.5 else g['away_name']
-            
             st.markdown(f'<div class="mobile-row"><div class="metric-box"><small>PROBABILITY 1</small><br><b>{max(data["prob1"], 1-data["prob1"])*100:.1f}%</b> <span style="color:#4ade80">{res1}</span></div></div>', unsafe_allow_html=True)
             st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>PROBABILITY 2</small><br><b>{max(data["prob2"], 1-data["prob2"])*100:.1f}%</b> <span style="color:#a78bfa">{res2}</span></div></div>', unsafe_allow_html=True)
+
+            # --- NEW: ANALYSIS BREAKDOWN ---
+            st.write("### 🧠 AI Logic Breakdown")
+            h, a = data['home'], data['away']
+            
+            # Helper to determine edge
+            def get_edge(h_val, a_val, lower_better=False):
+                if lower_better: return g['home_name'] if h_val < a_val else g['away_name']
+                return g['home_name'] if h_val > a_val else g['away_name']
+
+            edges = {
+                "Season Win %": get_edge(h['wpct'], a['wpct']),
+                "Starting Pitcher (ERA)": get_edge(h['era'], a['era'], True),
+                "Lineup Hitting (AVG)": get_edge(h['avg'], a['avg']),
+                "Power Potential (SLG)": get_edge(h['slg'], a['slg'])
+            }
+            
+            with st.container():
+                st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+                for cat, team in edges.items():
+                    color = "#4ade80" if team == g['home_name'] else "#3b82f6"
+                    st.write(f"**{cat}:** <span style='color:{color}'>{team} Edge</span>", unsafe_allow_html=True)
+                st.write(f"*Includes +3% Home Field Advantage for {g['home_name']}.*")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # LIVE SCORE & LINEUPS
+            st.write("### 🏟️ Live Score")
+            st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
 
             c1, c2 = st.columns(2)
             with c1:
