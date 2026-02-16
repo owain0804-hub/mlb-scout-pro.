@@ -17,7 +17,9 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
-    .standing-text { color: #8b949e; font-size: 0.9em; font-weight: normal; }
+    /* Professional Login Styling */
+    .login-header { text-align: center; padding-top: 50px; padding-bottom: 20px; }
+    .login-subtitle { text-align: center; color: #8b949e; margin-bottom: 30px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -56,17 +58,19 @@ if "current_user" not in st.session_state:
 if "user_pwd" not in st.session_state:
     st.session_state.user_pwd = None
 
-# --- SIDEBAR ---
-with st.sidebar:
-    st.title("⚾ MLB Intelligence Pro")
+# --- AUTHENTICATION SCREEN ---
+if not st.session_state.authenticated:
+    st.markdown("<h1 class='login-header'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 class='login-subtitle'>Please Log In to Continue</h3>", unsafe_allow_html=True)
     
-    if not st.session_state.authenticated:
-        mode = st.radio("Access Mode", ["Login", "Create Account"])
-        user_id = st.text_input("Profile Name")
-        input_pwd = st.text_input("Password", type="password")
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        mode = st.tabs(["Secure Login", "Register Account"])
         
-        if mode == "Login":
-            if st.button("Log In"):
+        with mode[0]:
+            user_id = st.text_input("Username", key="login_user")
+            input_pwd = st.text_input("Password", type="password", key="login_pwd")
+            if st.button("Access Dashboard"):
                 settings, success = load_settings(user_id, input_pwd)
                 if success:
                     st.session_state.authenticated = True
@@ -75,21 +79,27 @@ with st.sidebar:
                     st.session_state.saved_settings = settings
                     st.rerun()
                 elif success is False:
-                    st.error("❌ Incorrect password.")
+                    st.error("❌ Invalid credentials.")
                 else:
-                    st.error("❌ Profile not found.")
-        else:
-            if st.button("Create Account"):
-                if user_id and input_pwd:
-                    if os.path.exists(get_user_file(user_id)):
+                    st.error("❌ Profile not found. Please register.")
+        
+        with mode[1]:
+            new_user = st.text_input("New Username", key="reg_user")
+            new_pwd = st.text_input("New Password", type="password", key="reg_pwd")
+            if st.button("Create Professional Profile"):
+                if new_user and new_pwd:
+                    if os.path.exists(get_user_file(new_user)):
                         st.warning("⚠️ Profile already exists.")
                     else:
                         init_s = {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"}
-                        save_settings(user_id, input_pwd, init_s)
-                        st.success("✅ Account Created! You can now Log In.")
-        st.stop()
+                        save_settings(new_user, new_pwd, init_s)
+                        st.success("✅ Account Created! You may now login.")
+    st.stop()
 
-    st.write(f"Logged in: **{st.session_state.current_user}**")
+# --- SIDEBAR (POST-LOGIN) ---
+with st.sidebar:
+    st.title("⚾ Settings")
+    st.write(f"User: **{st.session_state.current_user}**")
     if st.button("Log Out"):
         st.session_state.authenticated = False
         st.rerun()
@@ -120,7 +130,7 @@ with st.sidebar:
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
         save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
         st.session_state.saved_settings = new_settings
-        st.success("Preferences Saved Professionally!")
+        st.success("Preferences Saved!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -130,9 +140,7 @@ def get_team_info(team_id, year):
         for div in standings.values():
             for t in div.get('teams', []):
                 if t.get('team_id') == team_id:
-                    record = f"{t['w']}-{t['l']}"
-                    wpct = (int(t['w']) / max(1, int(t['w'])+int(t['l'])))
-                    return record, wpct
+                    return f"{t['w']}-{t['l']}", (int(t['w']) / max(1, int(t['w'])+int(t['l'])))
     except: pass
     return "0-0", 0.500
 
@@ -168,9 +176,9 @@ def get_detailed_data(game_id, g_info, year, w_std, w_era, w_avg, w_slg, sensiti
                     sp_stat = statsapi.player_stat_data(p_list[0], group="pitching", type="season", season=year)
                     era = float(sp_stat['stats'][0]['stats'].get('era', 4.10))
                 except: pass
-            record, wpct = get_team_info(tid, year)
+            _, wpct = get_team_info(tid, year)
             score = (wpct*(w_std/100)) + ((4.1/max(0.1,era))*(w_era/100)) + ((sum(avgs)/max(1,len(avgs))*4)*(w_avg/100)) + ((sum(slgs)/max(1,len(slgs))*2.5)*(w_slg/100))
-            return {"score": score, "lineup": lineup, "p_name": p_name, "era": era, "record": record}
+            return {"score": score, "lineup": lineup, "p_name": p_name, "era": era}
 
         a_data = fetch_side_data('away', g_info['away_id'])
         h_data = fetch_side_data('home', g_info['home_id'])
@@ -210,7 +218,6 @@ for g in sorted_games:
                 winner = g['home_name'] if p_h > 0.5 else g['away_name']
                 st.markdown(f'<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>', unsafe_allow_html=True)
                 
-                # --- BOX SCORE ---
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.markdown("### 📊 Box Score")
                     r_a = g.get('away_score', 0)
@@ -229,15 +236,14 @@ for g in sorted_games:
                     })
                     st.dataframe(box_df, use_container_width=True, hide_index=True)
 
-                # --- LINEUPS & STANDINGS ---
-                st.markdown("### 📋 Lineups & Standings")
+                st.markdown("### 📋 Lineups & Pitching")
                 col_a, col_h = st.columns(2)
                 with col_a:
-                    st.markdown(f"**{g['away_name']}** <span class='standing-text'>({data['away']['record']})</span>", unsafe_allow_html=True)
+                    st.write(f"**{g['away_name']}**")
                     st.caption(f"SP: {data['away']['p_name']} ({data['away']['era']})")
                     st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
                 with col_h:
-                    st.markdown(f"**{g['home_name']}** <span class='standing-text'>({data['home']['record']})</span>", unsafe_allow_html=True)
+                    st.write(f"**{g['home_name']}**")
                     st.caption(f"SP: {data['home']['p_name']} ({data['home']['era']})")
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             else: st.info("Loading detailed analysis...")
