@@ -108,7 +108,7 @@ if not st.session_state.authenticated:
                     st.success("Account created!")
     st.stop()
 
-# --- APP CONTENT ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title(f"👋 {st.session_state.current_user}")
     u_data = load_user_data(st.session_state.current_user)
@@ -121,7 +121,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-    # --- 1. MODEL PRESETS ---
     s = st.session_state.saved_settings
     preset_choice = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], 
                              index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get('preset','Balanced')))
@@ -134,11 +133,6 @@ with st.sidebar:
         w_era = st.slider("Pitching %", 0, 100, s.get('w_era', 15))
         w_avg = st.slider("AVG %", 0, 100, s.get('w_avg', 20))
         w_slg = st.slider("SLG %", 0, 100, s.get('w_slg', 25))
-
-    # --- 2. IMPACT FEEDBACK ---
-    total_weight = w_std + w_era + w_avg + w_slg
-    if total_weight != 100:
-        st.warning(f"Weights total {total_weight}%. Accuracy is best at 100%.")
 
     sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
 
@@ -201,7 +195,6 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
             return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era, "wpct": wpct, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs)), "is_tbd": is_tbd}
         
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
-        # Home Field Advantage (+3%)
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
         return {"prob_h": max(0.01, min(0.99, prob_h)), "box": box, "away": a_d, "home": h_d}
     except: return None
@@ -237,52 +230,68 @@ else:
                     prob_val = data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h']
                     conf_pct = prob_val * 100
                     
-                    # --- 3. CONFIDENCE INDICATOR ---
                     if conf_pct > 58: conf_label, conf_color = "High", "#4CAF50"
                     elif conf_pct > 53: conf_label, conf_color = "Medium", "#FF9800"
                     else: conf_label, conf_color = "Low", "#f44336"
 
                     st.markdown(f"""
                         <div style="background: #1b2838; border: 2px solid {conf_color}; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;">
-                            🏅 Projection: <b>{res}</b> ({conf_pct:.1f}%) <br>
+                            🏅 Prediction: <b>{res}</b> ({conf_pct:.1f}%) <br>
                             <span style="font-size: 0.8em; color: {conf_color}">Confidence: {conf_label}</span>
                         </div>
                     """, unsafe_allow_html=True)
 
-                    # --- 4. PREDICTION BREAKDOWN ---
-                    with st.expander("🔍 Why this pick? (Impact Drivers)"):
+                    # --- UPDATED IMPACT DRIVERS SECTION ---
+                    with st.expander("🔍 Prediction Breakdown: Why this pick?"):
                         h, a = data['home'], data['away']
-                        b_std = h['c_std'] - a['c_std']
-                        b_era = h['c_era'] - a['c_era']
-                        b_avg = h['c_avg'] - a['c_avg']
-                        b_slg = h['c_slg'] - a['c_slg']
                         
-                        breakdown_data = {
-                            "Factor": ["Standings/Record", "Starter Matchup", "Lineup AVG", "Lineup Power"],
-                            "Home Impact": [f"{'+' if b_std > 0 else ''}{b_std:.2f}", 
-                                           f"{'+' if b_era > 0 else ''}{b_era:.2f}",
-                                           f"{'+' if b_avg > 0 else ''}{b_avg:.2f}",
-                                           f"{'+' if b_slg > 0 else ''}{b_slg:.2f}"]
-                        }
-                        st.table(pd.DataFrame(breakdown_data))
-                        st.caption("Positive numbers favor the Home team. Negative favor Away.")
+                        drivers = [
+                            ("Team Record / Standings", h['c_std'], a['c_std']),
+                            ("Pitching Matchup (ERA)", h['c_era'], a['c_era']),
+                            ("Lineup Consistency (AVG)", h['c_avg'], a['c_avg']),
+                            ("Lineup Power (SLG)", h['c_slg'], a['c_slg'])
+                        ]
+                        
+                        # Find the biggest difference to explain the "Main Driver"
+                        max_diff = -1
+                        main_reason = ""
+                        for label, hv, av in drivers:
+                            diff = abs(hv - av)
+                            if diff > max_diff:
+                                max_diff = diff
+                                main_reason = label
 
-                    # --- 5. TBD HANDLING ---
+                        st.write(f"**The biggest factor today is: {main_reason}**")
+
+                        for label, hv, av in drivers:
+                            # Calculate percentage-based edge for the bar
+                            total = hv + av if (hv + av) > 0 else 1
+                            h_perc = (hv / total)
+                            
+                            col_l, col_r = st.columns([1, 1])
+                            with col_l: st.write(f"**{label}**")
+                            with col_r:
+                                edge_team = g['home_name'] if hv > av else g['away_name']
+                                color = "green" if hv > av else "#58a6ff"
+                                st.progress(h_perc)
+                                st.caption(f"Edge: {edge_team}")
+                        
+                        st.info("💡 Bars leaning right favor the Home team. Bars leaning left favor the Away team.")
+
                     if data['home']['is_tbd'] or data['away']['is_tbd']:
-                        st.warning("⚠️ Starter(s) not officially confirmed. Prediction uses league averages.")
+                        st.warning("⚠️ Prediction uses league averages because starters are not confirmed.")
 
-                    # Visual Comparison Tables
-                    st.write("### 📊 Data Comparison")
-                    h, a = data['home'], data['away']
+                    # --- DATA TABLES ---
+                    st.write("### 📊 Scouting Data")
                     impact_df = pd.DataFrame([
-                        {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
+                        {"Category": "Win %", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
                         {"Category": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}"},
                         {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f}", g['away_name']: f"{a['avg_team']:.3f}"},
-                        {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
+                        {"Category": "Lineup SLG", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
                     ])
                     st.table(impact_df)
                     
-                    st.write("### 🏟️ Live Boxscore")
+                    st.write("### 🏟️ Game Stats")
                     box_data = data['box']
                     away_stats = box_data.get('away', {}).get('teamStats', {}).get('batting', {})
                     home_stats = box_data.get('home', {}).get('teamStats', {}).get('batting', {})
@@ -294,13 +303,12 @@ else:
                     })
                     st.table(live_df)
                     
-                    st.write("### 📋 Lineups & Starters")
                     la, lh = st.columns(2)
                     with la:
-                        st.write(f"**{g['away_name']} Starter:** {data['away']['p_name']} (ERA: {data['away']['era']})")
+                        st.write(f"**{g['away_name']} Starter:** {data['away']['p_name']}")
                         st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
                     with lh:
-                        st.write(f"**{g['home_name']} Starter:** {data['home']['p_name']} (ERA: {data['home']['era']})")
+                        st.write(f"**{g['home_name']} Starter:** {data['home']['p_name']}")
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             st.markdown('</div>', unsafe_allow_html=True)
-    
+        
