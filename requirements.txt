@@ -3,6 +3,3 @@ MLB-StatsAPI
 pandas
 extra-streamlit-components
 streamlit-autorefresh
-extra-streamlit-components
-pip install streamlit statsapi pandas extra-streamlit-components streamlit-autorefresh
-
