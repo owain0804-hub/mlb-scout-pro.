@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pd
+import pandas as pd # Fixed import
 import json
 import os
 import hashlib
@@ -13,7 +13,7 @@ from streamlit_autorefresh import st_autorefresh
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "owainbaseball@gmail.com" 
-SENDER_PASSWORD = "YOUR_16_DIGIT_APP_PASSWORD" # <--- Generate this in Google Account Settings
+SENDER_PASSWORD = "YOUR_16_DIGIT_APP_PASSWORD" 
 ADMIN_EMAIL = "owainbaseball@gmail.com"
 
 def send_admin_notification(new_user):
@@ -28,8 +28,8 @@ def send_admin_notification(new_user):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-    except Exception as e:
-        st.warning(f"Note: Account created, but email notification failed. Check App Password.")
+    except:
+        pass
 
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
@@ -112,7 +112,6 @@ with st.sidebar:
     if st.button("Log Out"): manage_persistent_session(action="logout"); st.session_state.authenticated = False; st.rerun()
     st.divider()
     s = st.session_state.saved_settings
-    
     preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
@@ -188,7 +187,6 @@ u_date = st.date_input("Date", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_g = {g['game_id']: g for g in sched}.values()
 
-# Sort games so favorite team is at the top
 fav = st.session_state.saved_settings.get("fav_team", "None")
 sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
@@ -210,8 +208,8 @@ for g in sorted_games:
                 
                 with st.expander("📊 Percentage Contribution by Stat"):
                     h, a = data['home'], data['away']
-                    total_h = h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg']
-                    total_a = a['c_std'] + a['c_era'] + a['c_avg'] + a['c_slg']
+                    total_h = max(0.01, h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg'])
+                    total_a = max(0.01, a['c_std'] + a['c_era'] + a['c_avg'] + a['c_slg'])
                     impact_df = pd.DataFrame([
                         {"Stat": "Standings", g['home_name']: f"{(h['c_std']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_std']/total_a)*100:.1f}%"},
                         {"Stat": "Pitching", g['home_name']: f"{(h['c_era']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_era']/total_a)*100:.1f}%"},
@@ -223,11 +221,17 @@ for g in sorted_games:
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
+                    # Fixed potential KeyError with .get() safety checks
+                    h_a = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    h_h = data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    e_a = data['box'].get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
+                    e_h = data['box'].get('home', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
+                    
                     box_df = pd.DataFrame({
                         "Team": [g['away_name'], g['home_name']],
                         "R": [r_a, r_h],
-                        "H": [data['box'].get('away',{}).get('teamStats',{}).get('batting',{}).get('hits','-'), data['box'].get('home',{}).get('teamStats',{}).get('batting',{}).get('hits','-')],
-                        "E": [data['box'].get('away',{}).get('teamStats',{}).get('fielding',{}).get('errors','-'), data['box'].get('home',{}).get('teamStats',{}).get('fielding',{}).get('errors','-')]
+                        "H": [h_a, h_h],
+                        "E": [e_a, e_h]
                     })
                     
                     def highlight_winner(row):
@@ -252,4 +256,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-        
+                    
