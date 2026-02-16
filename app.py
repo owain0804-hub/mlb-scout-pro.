@@ -182,7 +182,6 @@ def analyze_game(gid, g_info, year, weights):
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
-    # Probability Logic
     s1_h = (h['wpct']*0.3) + ((4.5/max(0.1, h['era']))*0.3) + (h['avg']*2.0) + (h['slg']*1.5)
     s1_a = (a['wpct']*0.3) + ((4.5/max(0.1, a['era']))*0.3) + (a['avg']*2.0) + (a['slg']*1.5)
     prob1 = 0.5 + (s1_h - s1_a) + 0.03
@@ -200,7 +199,10 @@ sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
 fav_team = user_data.get("fav", "None")
 user_weights = user_data.get("weights", [30, 30, 20, 20])
 
-for g in sched:
+# --- NEW: SORT SCHEDULE TO PUT FAVORITE TEAM FIRST ---
+sorted_sched = sorted(sched, key=lambda x: (x['home_name'] != fav_team and x['away_name'] != fav_team))
+
+for g in sorted_sched:
     is_fav = (g['home_name'] == fav_team or g['away_name'] == fav_team)
     card_style = "border-color: #eab308; border-width: 2px;" if is_fav else ""
     
@@ -232,3 +234,4 @@ for g in sched:
             with c2:
                 st.markdown(f"""<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g['home_id']}.svg" width="20"> {data['home']['p']} (ERA: {data['home']['era']})</div>""", unsafe_allow_html=True)
                 st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
+                
