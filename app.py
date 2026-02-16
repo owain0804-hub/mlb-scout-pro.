@@ -5,9 +5,10 @@ import json
 import os
 import hashlib
 import smtplib
+import time
 import extra_streamlit_components as stx
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta # Added timedelta for cookie math
+from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
 # --- EMAIL CONFIGURATION ---
@@ -32,7 +33,6 @@ def send_admin_notification(new_user):
     except: pass
 
 # --- COOKIE MANAGER ---
-# FIXED: Moved outside of a function to solve CachedWidgetWarning
 cookie_manager = stx.CookieManager()
 
 # --- PAGE CONFIG & THEME ---
@@ -70,9 +70,11 @@ def load_settings(username, password_hash, is_raw_password=True):
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
+# Cookie Auto-Login
 if not st.session_state.authenticated:
-    saved_user = cookie_manager.get("mlb_user")
-    saved_token = cookie_manager.get("mlb_token")
+    cookies = cookie_manager.get_all()
+    saved_user = cookies.get("mlb_user")
+    saved_token = cookies.get("mlb_token")
     if saved_user and saved_token:
         sets, ok = load_settings(saved_user, saved_token, is_raw_password=False)
         if ok:
@@ -85,23 +87,34 @@ if not st.session_state.authenticated:
     with c2:
         m = st.tabs(["Login", "Register"])
         with m[0]:
-            uid, pwd = st.text_input("User"), st.text_input("Pass", type="password")
+            uid = st.text_input("User", key="login_user")
+            pwd = st.text_input("Pass", type="password", key="login_pass")
             if st.button("Access"):
-                s, ok = load_settings(uid, pwd)
-                if ok:
-                    h = hash_password(pwd)
-                    # FIXED: Used datetime object for expires_at to solve AttributeError
-                    expiry = datetime.now() + timedelta(days=30)
-                    cookie_manager.set("mlb_user", uid, expires_at=expiry)
-                    cookie_manager.set("mlb_token", h, expires_at=expiry)
-                    st.session_state.authenticated, st.session_state.current_user = True, uid
-                    st.session_state.user_pwd_hash, st.session_state.saved_settings = h, s
-                    st.rerun()
+                if uid and pwd:
+                    s, ok = load_settings(uid, pwd)
+                    if ok:
+                        h = hash_password(pwd)
+                        expiry = datetime.now() + timedelta(days=30)
+                        cookie_manager.set("mlb_user", uid, expires_at=expiry)
+                        cookie_manager.set("mlb_token", h, expires_at=expiry)
+                        st.session_state.authenticated = True
+                        st.session_state.current_user = uid
+                        st.session_state.user_pwd_hash = h
+                        st.session_state.saved_settings = s
+                        st.success("Logging in...")
+                        time.sleep(0.5) # Allow cookie to set
+                        st.rerun()
+                    else: st.error("Invalid Credentials")
+                else: st.warning("Please enter username and password")
         with m[1]:
-            nu, np = st.text_input("New User"), st.text_input("New Pass", type="password")
+            nu = st.text_input("New User", key="reg_user")
+            np = st.text_input("New Pass", type="password", key="reg_pass")
             if st.button("Create"):
-                save_settings(nu, np, {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"})
-                send_admin_notification(nu); st.success("Created! Now Log In.")
+                if nu and np:
+                    save_settings(nu, np, {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"})
+                    send_admin_notification(nu)
+                    st.success("Created! Switch to Login tab.")
+                else: st.warning("Please enter a username and password")
     st.stop()
 
 # --- SIDEBAR ---
@@ -110,10 +123,12 @@ with st.sidebar:
     if st.button("Log Out"):
         cookie_manager.delete("mlb_user")
         cookie_manager.delete("mlb_token")
-        st.session_state.authenticated = False; st.rerun()
+        st.session_state.authenticated = False
+        st.rerun()
     st.divider()
     s = st.session_state.saved_settings
     preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
+    
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -122,18 +137,21 @@ with st.sidebar:
         w_era = st.slider("Pitching %", 0, 100, s["w_era"])
         w_avg = st.slider("Lineup AVG %", 0, 100, s["w_avg"])
         w_slg = st.slider("Lineup SLG %", 0, 100, s["w_slg"])
+    
     sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
     
     try:
         all_teams_data = statsapi.get('teams', {'sportId': 1})['teams']
         all_teams = sorted([t['name'] for t in all_teams_data])
     except: all_teams = []
+    
     fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
 
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
         save_settings(st.session_state.current_user, "", new_settings)
-        st.session_state.saved_settings = new_settings; st.success("Saved!")
+        st.session_state.saved_settings = new_settings
+        st.success("Saved!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -174,6 +192,7 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
             c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
             c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
             return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era, "wpct": wpct, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs))}
+        
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
         return {"prob_h": max(0.01, min(0.99, prob_h)), "box": box, "away": a_d, "home": h_d}
@@ -195,12 +214,14 @@ for g in sorted_games:
         with c2: st.markdown(f"**{g['away_name']} @ {g['home_name']}**")
         with c3:
             if st.button("Analyze", key=f"b_{g['game_id']}"): st.session_state.active_game_id = g['game_id']
+        
         if st.session_state.get("active_game_id") == g['game_id']:
             data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
             if data:
                 res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
                 conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                 st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
+                
                 with st.expander("📊 Strength Comparison"):
                     h, a = data['home'], data['away']
                     t_h, t_a = max(0.01, h['score']), max(0.01, a['score'])
@@ -211,6 +232,7 @@ for g in sorted_games:
                         {"Category": "Lineup Power", g['home_name']: f"{h['slg_team']:.3f} ({(h['c_slg']/t_h)*100:.1f}%)", g['away_name']: f"{a['slg_team']:.3f} ({(a['c_slg']/t_a)*100:.1f}%)"},
                     ])
                     st.table(impact_df)
+                
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
@@ -218,6 +240,7 @@ for g in sorted_games:
                     h_h = data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [r_a, r_h], "H": [h_a, h_h]})
                     st.dataframe(box_df, hide_index=True, use_container_width=True)
+                
                 la, lh = st.columns(2)
                 with la:
                     st.write(f"**{g['away_name']}**")
@@ -229,4 +252,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-        
+            
