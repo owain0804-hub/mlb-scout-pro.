@@ -3,3 +3,4 @@ MLB-StatsAPI
 pandas
 extra-streamlit-components
 streamlit-autorefresh
+extra-streamlit-components
