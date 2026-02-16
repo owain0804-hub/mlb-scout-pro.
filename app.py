@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pandas as pd # Fixed import
+import pandas as pd
 import json
 import os
 import hashlib
@@ -28,8 +28,7 @@ def send_admin_notification(new_user):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-    except:
-        pass
+    except: pass
 
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
@@ -174,7 +173,7 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
             c_era = (4.1/max(0.1,era)) * (w_era/100)
             c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
             c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
-            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era}
+            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era, "wpct": wpct, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs))}
 
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
@@ -206,42 +205,34 @@ for g in sorted_games:
                 conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                 st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                 
-                with st.expander("📊 Percentage Contribution by Stat"):
+                with st.expander("📊 Why this team is favored (Stat Comparison)"):
                     h, a = data['home'], data['away']
                     total_h = max(0.01, h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg'])
                     total_a = max(0.01, a['c_std'] + a['c_era'] + a['c_avg'] + a['c_slg'])
+                    
                     impact_df = pd.DataFrame([
-                        {"Stat": "Standings", g['home_name']: f"{(h['c_std']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_std']/total_a)*100:.1f}%"},
-                        {"Stat": "Pitching", g['home_name']: f"{(h['c_era']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_era']/total_a)*100:.1f}%"},
-                        {"Stat": "Batting AVG", g['home_name']: f"{(h['c_avg']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_avg']/total_a)*100:.1f}%"},
-                        {"Stat": "Slugging", g['home_name']: f"{(h['c_slg']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_slg']/total_a)*100:.1f}%"},
+                        {"Category": "Team Record", g['home_name']: f"{h['wpct']:.3f} ({ (h['c_std']/total_h)*100:.1f}%)", g['away_name']: f"{a['wpct']:.3f} ({ (a['c_std']/total_a)*100:.1f}%)"},
+                        {"Category": "Pitching (ERA)", g['home_name']: f"{h['era']:.2f} ({ (h['c_era']/total_h)*100:.1f}%)", g['away_name']: f"{a['era']:.2f} ({ (a['c_era']/total_a)*100:.1f}%)"},
+                        {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f} ({ (h['c_avg']/total_h)*100:.1f}%)", g['away_name']: f"{a['avg_team']:.3f} ({ (a['c_avg']/total_a)*100:.1f}%)"},
+                        {"Category": "Lineup Power", g['home_name']: f"{h['slg_team']:.3f} ({ (h['c_slg']/total_h)*100:.1f}%)", g['away_name']: f"{a['slg_team']:.3f} ({ (a['c_slg']/total_a)*100:.1f}%)"},
                     ])
                     st.table(impact_df)
+                    st.caption("The first number is the real stat. The percentage in ( ) is how much that stat helped the team's projection score.")
 
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
-                    # Fixed potential KeyError with .get() safety checks
                     h_a = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     h_h = data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     e_a = data['box'].get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
                     e_h = data['box'].get('home', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
                     
-                    box_df = pd.DataFrame({
-                        "Team": [g['away_name'], g['home_name']],
-                        "R": [r_a, r_h],
-                        "H": [h_a, h_h],
-                        "E": [e_a, e_h]
-                    })
-                    
+                    box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [r_a, r_h], "H": [h_a, h_h], "E": [e_a, e_h]})
                     def highlight_winner(row):
                         styles = [''] * len(row)
-                        if r_a > r_h and row['Team'] == g['away_name']:
-                            styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
-                        elif r_h > r_a and row['Team'] == g['home_name']:
-                            styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
+                        if r_a > r_h and row['Team'] == g['away_name']: styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
+                        elif r_h > r_a and row['Team'] == g['home_name']: styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
                         return styles
-
                     st.dataframe(box_df.style.apply(highlight_winner, axis=1), hide_index=True, use_container_width=True)
 
                 st.write("### 📋 Lineups")
@@ -256,4 +247,3 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-                    
