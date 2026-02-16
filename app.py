@@ -1,4 +1,4 @@
-   import streamlit as st.
+import streamlit as st
 import statsapi
 import pandas as pd
 import json
@@ -49,12 +49,13 @@ def hash_password(password): return hashlib.sha256(str.encode(password)).hexdige
 def get_user_file(username): return f"profile_{''.join(x for x in username if x.isalnum())}.json"
 
 def save_settings(username, password, settings_data):
-    # If password is provided, we hash it. If not (just updating settings), we keep the old one.
     filename = get_user_file(username)
     existing_hash = ""
     if os.path.exists(filename):
-        with open(filename, "r") as f:
-            existing_hash = json.load(f).get("password_hash")
+        try:
+            with open(filename, "r") as f:
+                existing_hash = json.load(f).get("password_hash")
+        except: pass
     
     new_hash = hash_password(password) if password else existing_hash
     with open(filename, "w") as f:
@@ -63,13 +64,15 @@ def save_settings(username, password, settings_data):
 def load_settings(username, password):
     filename = get_user_file(username)
     if os.path.exists(filename):
-        with open(filename, "r") as f:
-            data = json.load(f)
-            if data.get("password_hash") == hash_password(password): 
-                return data.get("settings"), True
+        try:
+            with open(filename, "r") as f:
+                data = json.load(f)
+                if data.get("password_hash") == hash_password(password): 
+                    return data.get("settings"), True
+        except: pass
     return None, False
 
-# --- AUTH LOGIC (No Cookies) ---
+# --- AUTH LOGIC ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
@@ -110,8 +113,14 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
-    s = st.session_state.saved_settings
-    preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
+    
+    # Safely get settings
+    s = st.session_state.get("saved_settings", {})
+    preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
+    current_preset = s.get("preset", "Balanced")
+    preset_idx = preset_options.index(current_preset) if current_preset in preset_options else 0
+    
+    preset = st.radio("Model Presets", preset_options, index=preset_idx)
     
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
@@ -129,7 +138,9 @@ with st.sidebar:
         all_teams = sorted([t['name'] for t in all_teams_data])
     except: all_teams = []
     
-    fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
+    fav_team_val = s.get("fav_team", "None")
+    fav_idx = (["None"] + all_teams).index(fav_team_val) if fav_team_val in (["None"] + all_teams) else 0
+    fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, index=fav_idx)
 
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
@@ -187,7 +198,9 @@ st.header("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_g = {g['game_id']: g for g in sched}.values()
-fav = st.session_state.saved_settings.get("fav_team", "None")
+
+# Safely get fav_team for sorting
+fav = st.session_state.get("saved_settings", {}).get("fav_team", "None")
 sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
 for g in sorted_games:
@@ -208,7 +221,6 @@ for g in sorted_games:
                 
                 with st.expander("📊 Comparison Breakdown"):
                     h, a = data['home'], data['away']
-                    t_h, t_a = max(0.01, h['score']), max(0.01, a['score'])
                     impact_df = pd.DataFrame([
                         {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
                         {"Category": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}"},
@@ -226,4 +238,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Loading analysis...")
         st.markdown('</div>', unsafe_allow_html=True)
- 
+                                      
