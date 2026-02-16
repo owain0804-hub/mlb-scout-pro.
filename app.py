@@ -101,7 +101,7 @@ if not st.session_state.authenticated:
                     save_user_data(nu, {
                         "pwd_hash": get_hash(np, salt),
                         "salt": salt.hex(),
-                        "settings": {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"},
+                        "settings": {"fav_team": "None", "w_std": 35, "w_era": 20, "w_avg": 20, "w_slg": 25, "preset": "Balanced (Recommended)"},
                         "login_count": 0
                     })
                     send_admin_notification(nu)
@@ -121,16 +121,23 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
+    # --- UPDATED PRESETS FROM SCREENSHOT ---
     s = st.session_state.saved_settings
-    preset_choice = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], 
-                             index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get('preset','Balanced')))
+    preset_list = ["Balanced (Recommended)", "Pitching Heavy", "Offense Heavy", "Custom"]
     
-    if preset_choice == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
+    # Map old "Balanced" name to new name if needed
+    current_p = s.get('preset', 'Balanced (Recommended)')
+    if current_p == "Balanced": current_p = "Balanced (Recommended)"
+    
+    preset_choice = st.radio("Model Presets", preset_list, index=preset_list.index(current_p) if current_p in preset_list else 0)
+    
+    # Screenshot values: 35, 20, 20, 25
+    if preset_choice == "Balanced (Recommended)": w_std, w_era, w_avg, w_slg = 35, 20, 20, 25
     elif preset_choice == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset_choice == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
     else:
-        w_std = st.slider("Standings %", 0, 100, s.get('w_std', 40))
-        w_era = st.slider("Pitching %", 0, 100, s.get('w_era', 15))
+        w_std = st.slider("Standings %", 0, 100, s.get('w_std', 35))
+        w_era = st.slider("Pitching %", 0, 100, s.get('w_era', 20))
         w_avg = st.slider("AVG %", 0, 100, s.get('w_avg', 20))
         w_slg = st.slider("SLG %", 0, 100, s.get('w_slg', 25))
 
@@ -236,12 +243,12 @@ else:
 
                     st.markdown(f"""
                         <div style="background: #1b2838; border: 2px solid {conf_color}; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;">
-                            🏅 Prediction: <b>{res}</b> ({conf_pct:.1f}%) <br>
+                            🏅 Projection: <b>{res}</b> ({conf_pct:.1f}%) <br>
                             <span style="font-size: 0.8em; color: {conf_color}">Confidence: {conf_label}</span>
                         </div>
                     """, unsafe_allow_html=True)
 
-                    # --- UPDATED IMPACT DRIVERS SECTION ---
+                    # --- UPDATED IMPACT DRIVERS (CLEANED) ---
                     with st.expander("🔍 Prediction Breakdown: Why this pick?"):
                         h, a = data['home'], data['away']
                         
@@ -252,7 +259,6 @@ else:
                             ("Lineup Power (SLG)", h['c_slg'], a['c_slg'])
                         ]
                         
-                        # Find the biggest difference to explain the "Main Driver"
                         max_diff = -1
                         main_reason = ""
                         for label, hv, av in drivers:
@@ -264,7 +270,6 @@ else:
                         st.write(f"**The biggest factor today is: {main_reason}**")
 
                         for label, hv, av in drivers:
-                            # Calculate percentage-based edge for the bar
                             total = hv + av if (hv + av) > 0 else 1
                             h_perc = (hv / total)
                             
@@ -272,11 +277,8 @@ else:
                             with col_l: st.write(f"**{label}**")
                             with col_r:
                                 edge_team = g['home_name'] if hv > av else g['away_name']
-                                color = "green" if hv > av else "#58a6ff"
                                 st.progress(h_perc)
                                 st.caption(f"Edge: {edge_team}")
-                        
-                        st.info("💡 Bars leaning right favor the Home team. Bars leaning left favor the Away team.")
 
                     if data['home']['is_tbd'] or data['away']['is_tbd']:
                         st.warning("⚠️ Prediction uses league averages because starters are not confirmed.")
@@ -311,4 +313,4 @@ else:
                         st.write(f"**{g['home_name']} Starter:** {data['home']['p_name']}")
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             st.markdown('</div>', unsafe_allow_html=True)
-        
+            
