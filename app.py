@@ -164,9 +164,12 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
                     slgs.append(float(str(p_st.get('slg', '.400')).replace('.','0.')))
                 except: avgs.append(0.25); slgs.append(0.40)
             
-            era = 4.10
+            p_name, era = "TBD", 4.10
             if sd.get('pitchers'):
-                try: era = float(statsapi.player_stat_data(sd['pitchers'][0], group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', 4.10))
+                try: 
+                    pid = sd['pitchers'][0]
+                    p_name = ps.get(f"ID{pid}", {}).get('person', {}).get('fullName', "TBD")
+                    era = float(statsapi.player_stat_data(pid, group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', 4.10))
                 except: pass
             
             wpct = get_team_info(tid, year)
@@ -174,7 +177,7 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
             c_era = (4.1/max(0.1,era)) * (w_era/100)
             c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
             c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
-            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg}
+            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era}
 
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
@@ -232,28 +235,27 @@ for g in sorted_games:
                         "E": [data['box'].get('away',{}).get('teamStats',{}).get('fielding',{}).get('errors','-'), data['box'].get('home',{}).get('teamStats',{}).get('fielding',{}).get('errors','-')]
                     })
                     
-                    # Logic to highlight the winning team
                     def highlight_winner(row):
                         styles = [''] * len(row)
-                        # If Away is winning/won
                         if r_a > r_h and row['Team'] == g['away_name']:
                             styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
-                        # If Home is winning/won
                         elif r_h > r_a and row['Team'] == g['home_name']:
                             styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
                         return styles
 
                     st.dataframe(box_df.style.apply(highlight_winner, axis=1), hide_index=True, use_container_width=True)
 
-                # Lineups
+                # Lineups & Pitchers
                 st.write("### 📋 Lineups")
                 la, lh = st.columns(2)
                 with la:
                     st.write(f"**{g['away_name']}**")
+                    st.markdown(f"**SP: {data['away']['p_name']}** (ERA: {data['away']['era']})")
                     st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
                 with lh:
                     st.write(f"**{g['home_name']}**")
+                    st.markdown(f"**SP: {data['home']['p_name']}** (ERA: {data['home']['era']})")
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-            
+    
