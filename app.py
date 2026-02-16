@@ -13,57 +13,12 @@ import extra_streamlit_components as stx
 def apply_pro_styles():
     st.markdown("""
         <style>
-        .mobile-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            margin-bottom: 15px;
-        }
-        .metric-box {
-            background: #1e293b;
-            border: 1px solid #3b82f6;
-            border-radius: 8px;
-            padding: 12px;
-            flex: 1;
-            text-align: center;
-        }
-        .metric-box-2 {
-            background: #2b1d3d; 
-            border: 1px solid #8b5cf6;
-            border-radius: 8px;
-            padding: 12px;
-            flex: 1;
-            text-align: center;
-        }
-        .analysis-box {
-            background: #161b22;
-            border: 1px solid #30363d;
-            border-radius: 8px;
-            padding: 15px;
-            margin-top: 10px;
-            margin-bottom: 20px;
-        }
-        .matchup-card {
-            background: #0d1117;
-            border: 1px solid #30363d;
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-        .pitcher-header {
-            background: #161b22;
-            border-bottom: 2px solid #3fb950;
-            padding: 8px;
-            margin-bottom: 5px;
-            border-radius: 4px 4px 0 0;
-            font-weight: bold;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
+        .mobile-row { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 15px; }
+        .metric-box { background: #1e293b; border: 1px solid #3b82f6; border-radius: 8px; padding: 12px; flex: 1; text-align: center; }
+        .metric-box-2 { background: #2b1d3d; border: 1px solid #8b5cf6; border-radius: 8px; padding: 12px; flex: 1; text-align: center; }
+        .analysis-box { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 15px; margin-top: 10px; margin-bottom: 20px; }
+        .matchup-card { background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 15px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; }
+        .pitcher-header { background: #161b22; border-bottom: 2px solid #3fb950; padding: 8px; margin-bottom: 5px; border-radius: 4px 4px 0 0; font-weight: bold; display: flex; align-items: center; gap: 10px; }
         .team-logo { width: 40px; height: 40px; }
         </style>
     """, unsafe_allow_html=True)
@@ -101,34 +56,51 @@ if not st.session_state.auth:
     with t1:
         u, p = st.text_input("Username"), st.text_input("Password", type="password")
         if st.button("Enter"):
-            if u in users_db and users_db[u]['pw'] == hash_pw(p):
+            # Fix KeyError: Ensure user exists and has a 'pw' key
+            if u in users_db and users_db[u].get('pw') == hash_pw(p):
                 st.session_state.auth, st.session_state.username = True, u
                 cookie_manager.set("mlb_login", u, expires_at=datetime(2026, 12, 31))
                 st.rerun()
+            else: st.error("Invalid credentials.")
     with t2:
         nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
         if st.button("Create Account") and nu and np:
+            # Added 5th weight for Bullpen by default
             users_db[nu] = {"pw": hash_pw(np), "fav": "None", "weights": [25, 25, 15, 20, 15], "display_model": 1}
             save_users(users_db); st.success("Ready! Please Login.")
     st.stop()
 
-# --- SIDEBAR ---
+# --- SIDEBAR & DATA VALIDATION ---
 user_data = users_db.get(st.session_state.username, {})
+
+# Fix IndexError: Ensure weights list has 5 elements
+weights_list = user_data.get("weights", [25, 25, 15, 20, 15])
+if len(weights_list) < 5:
+    weights_list = [25, 25, 15, 20, 15] # Reset to default if legacy user
+
 with st.sidebar:
     st.write(f"User: **{st.session_state.username}**")
     cur_m = user_data.get("display_model", 1)
     sel_m = st.radio("Model Selection", [1, 2], index=0 if cur_m == 1 else 1)
     st.divider()
     all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
-    fav = st.selectbox("Favorite Team", ["None"] + all_teams, index=(["None"] + all_teams).index(user_data.get("fav", "None")))
+    fav_team_val = user_data.get("fav", "None")
+    fav_idx = (["None"] + all_teams).index(fav_team_val) if fav_team_val in (["None"] + all_teams) else 0
+    fav = st.selectbox("Favorite Team", ["None"] + all_teams, index=fav_idx)
     st.divider()
     st.write("### 🎚️ Model 2 Weights")
-    w = user_data.get("weights", [25, 25, 15, 20, 15])
-    w_win = st.slider("Win %", 0, 100, w[0]); w_era = st.slider("Starter ERA", 0, 100, w[1])
-    w_bp = st.slider("Bullpen ERA", 0, 100, w[2]); w_avg = st.slider("Lineup AVG", 0, 100, w[3])
-    w_slg = st.slider("Lineup SLG", 0, 100, w[4])
+    w_win = st.slider("Win %", 0, 100, weights_list[0])
+    w_era = st.slider("Starter ERA", 0, 100, weights_list[1])
+    w_bp = st.slider("Bullpen ERA", 0, 100, weights_list[2])
+    w_avg = st.slider("Lineup AVG", 0, 100, weights_list[3])
+    w_slg = st.slider("Lineup SLG", 0, 100, weights_list[4])
+    
     if st.button("Save All Settings"):
-        users_db[st.session_state.username].update({"fav": fav, "weights": [w_win, w_era, w_bp, w_avg, w_slg], "display_model": sel_m})
+        users_db[st.session_state.username].update({
+            "fav": fav, 
+            "weights": [w_win, w_era, w_bp, w_avg, w_slg], 
+            "display_model": sel_m
+        })
         save_users(users_db); st.toast("Saved!"); st.rerun()
     if st.button("Logout"): cookie_manager.delete("mlb_login"); st.session_state.auth = False; st.rerun()
 
@@ -153,7 +125,8 @@ def analyze_game(gid, g_info, year, weights):
     box = statsapi.boxscore_data(gid)
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        starters = sorted([p for p in ps.values() if p.get('battingOrder', '').endswith('00')], key=lambda x: x['battingOrder'])
+        # Safety filter for starting lineup
+        starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x['battingOrder'])
         lineup, avgs, slgs = [], [], []
         for p in starters:
             try:
@@ -171,12 +144,12 @@ def analyze_game(gid, g_info, year, weights):
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
-    # Prob 1 Math (Now with Bullpen 15% weight)
+    # Model 1
     s1_h = (h['wpct']*0.25) + ((4.5/max(0.1, h['era']))*0.25) + ((4.5/max(0.1, h['bp_era']))*0.15) + (h['avg']*1.5) + (h['slg']*1.2)
     s1_a = (a['wpct']*0.25) + ((4.5/max(0.1, a['era']))*0.25) + ((4.5/max(0.1, a['bp_era']))*0.15) + (a['avg']*1.5) + (a['slg']*1.2)
     p1 = 0.5 + (s1_h - s1_a) + 0.02
     
-    # Prob 2 Math (Dynamic Weights)
+    # Model 2
     uw = [v/100 for v in weights]
     s2_h = (h['wpct']*uw[0]) + ((4.5/max(0.1, h['era']))*uw[1]) + ((4.5/max(0.1, h['bp_era']))*uw[2]) + (h['avg']*(uw[3]*10)) + (h['slg']*(uw[4]*7.5))
     s2_a = (a['wpct']*uw[0]) + ((4.5/max(0.1, a['era']))*uw[1]) + ((4.5/max(0.1, a['bp_era']))*uw[2]) + (a['avg']*(uw[3]*10)) + (a['slg']*(uw[4]*7.5))
@@ -192,7 +165,7 @@ for g in sorted_sched:
     is_f = (g['home_name'] == fav or g['away_name'] == fav)
     st.markdown(f'<div class="matchup-card" style="{"border: 2px solid #eab308;" if is_f else ""}"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" class="team-logo"><div style="text-align:center;"><b>{g["away_name"]} @ {g["home_name"]}</b></div><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" class="team-logo"></div>', unsafe_allow_html=True)
     if st.button("Analyze", key=g['game_id'], use_container_width=True):
-        data = analyze_game(g['game_id'], g, dt.year, user_data.get("weights", [25, 25, 15, 20, 15]))
+        data = analyze_game(g['game_id'], g, dt.year, weights_list)
         p_val = data['prob1'] if sel_m == 1 else data['prob2']
         res = g['home_name'] if p_val > 0.5 else g['away_name']
         st.markdown(f'<div class="mobile-row"><div class="{"metric-box" if sel_m==1 else "metric-box-2"}"><small>PROBABILITY {sel_m}</small><br><b>{max(p_val, 1-p_val)*100:.1f}%</b> <span style="color:#4ade80">{res}</span></div></div>', unsafe_allow_html=True)
@@ -216,4 +189,4 @@ for g in sorted_sched:
         with c2:
             st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" width="20"> {h["p"]} ({h["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(h['lineup']), hide_index=True)
-                
+    
