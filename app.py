@@ -17,6 +17,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
+    .standing-text { color: #8b949e; font-size: 0.9em; font-weight: normal; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -129,7 +130,9 @@ def get_team_info(team_id, year):
         for div in standings.values():
             for t in div.get('teams', []):
                 if t.get('team_id') == team_id:
-                    return f"{t['w']}-{t['l']}", (int(t['w']) / max(1, int(t['w'])+int(t['l'])))
+                    record = f"{t['w']}-{t['l']}"
+                    wpct = (int(t['w']) / max(1, int(t['w'])+int(t['l'])))
+                    return record, wpct
     except: pass
     return "0-0", 0.500
 
@@ -165,9 +168,9 @@ def get_detailed_data(game_id, g_info, year, w_std, w_era, w_avg, w_slg, sensiti
                     sp_stat = statsapi.player_stat_data(p_list[0], group="pitching", type="season", season=year)
                     era = float(sp_stat['stats'][0]['stats'].get('era', 4.10))
                 except: pass
-            _, wpct = get_team_info(tid, year)
+            record, wpct = get_team_info(tid, year)
             score = (wpct*(w_std/100)) + ((4.1/max(0.1,era))*(w_era/100)) + ((sum(avgs)/max(1,len(avgs))*4)*(w_avg/100)) + ((sum(slgs)/max(1,len(slgs))*2.5)*(w_slg/100))
-            return {"score": score, "lineup": lineup, "p_name": p_name, "era": era}
+            return {"score": score, "lineup": lineup, "p_name": p_name, "era": era, "record": record}
 
         a_data = fetch_side_data('away', g_info['away_id'])
         h_data = fetch_side_data('home', g_info['home_id'])
@@ -207,14 +210,12 @@ for g in sorted_games:
                 winner = g['home_name'] if p_h > 0.5 else g['away_name']
                 st.markdown(f'<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>', unsafe_allow_html=True)
                 
-                # --- BOX SCORE (Fixed with Safe Fallbacks) ---
+                # --- BOX SCORE ---
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.markdown("### 📊 Box Score")
                     r_a = g.get('away_score', 0)
                     r_h = g.get('home_score', 0)
-                    
                     b_data = data['box']
-                    # Using .get() for multi-level dictionaries to prevent KeyError
                     h_a = b_data.get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     h_h = b_data.get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     e_a = b_data.get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
@@ -228,15 +229,15 @@ for g in sorted_games:
                     })
                     st.dataframe(box_df, use_container_width=True, hide_index=True)
 
-                # --- LINEUPS ---
-                st.markdown("### 📋 Lineups & Pitching")
+                # --- LINEUPS & STANDINGS ---
+                st.markdown("### 📋 Lineups & Standings")
                 col_a, col_h = st.columns(2)
                 with col_a:
-                    st.write(f"**{g['away_name']}**")
+                    st.markdown(f"**{g['away_name']}** <span class='standing-text'>({data['away']['record']})</span>", unsafe_allow_html=True)
                     st.caption(f"SP: {data['away']['p_name']} ({data['away']['era']})")
                     st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
                 with col_h:
-                    st.write(f"**{g['home_name']}**")
+                    st.markdown(f"**{g['home_name']}** <span class='standing-text'>({data['home']['record']})</span>", unsafe_allow_html=True)
                     st.caption(f"SP: {data['home']['p_name']} ({data['home']['era']})")
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             else: st.info("Loading detailed analysis...")
