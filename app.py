@@ -1,13 +1,13 @@
 import streamlit as st
 import statsapi
-import pandas as pd # FIXED: Corrected import
+import pandas as pd
 import json
 import os
 import hashlib
 import smtplib
 import extra_streamlit_components as stx
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timedelta # Added timedelta for cookie math
 from streamlit_autorefresh import st_autorefresh
 
 # --- EMAIL CONFIGURATION ---
@@ -32,7 +32,7 @@ def send_admin_notification(new_user):
     except: pass
 
 # --- COOKIE MANAGER ---
-# FIXED: Moved outside of a cached function to solve the widget error
+# FIXED: Moved outside of a function to solve CachedWidgetWarning
 cookie_manager = stx.CookieManager()
 
 # --- PAGE CONFIG & THEME ---
@@ -90,8 +90,10 @@ if not st.session_state.authenticated:
                 s, ok = load_settings(uid, pwd)
                 if ok:
                     h = hash_password(pwd)
-                    cookie_manager.set("mlb_user", uid, expires_at=datetime.now().timestamp() + 2592000)
-                    cookie_manager.set("mlb_token", h, expires_at=datetime.now().timestamp() + 2592000)
+                    # FIXED: Used datetime object for expires_at to solve AttributeError
+                    expiry = datetime.now() + timedelta(days=30)
+                    cookie_manager.set("mlb_user", uid, expires_at=expiry)
+                    cookie_manager.set("mlb_token", h, expires_at=expiry)
                     st.session_state.authenticated, st.session_state.current_user = True, uid
                     st.session_state.user_pwd_hash, st.session_state.saved_settings = h, s
                     st.rerun()
@@ -227,4 +229,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-                    
+        
