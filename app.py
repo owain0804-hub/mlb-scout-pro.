@@ -80,8 +80,7 @@ if not st.session_state.authenticated:
             p_in = st.text_input("Password", type="password")
             if st.button("Access System"):
                 u_data = load_user_data(u_in)
-                # Check if file exists AND has the new security keys
-                if u_data and 'salt' in u_data and 'pwd_hash' in u_data:
+                if u_data and 'salt' in u_data:
                     salt = bytes.fromhex(u_data['salt'])
                     if u_data['pwd_hash'] == get_hash(p_in, salt):
                         new_token = secrets.token_urlsafe(32)
@@ -93,7 +92,7 @@ if not st.session_state.authenticated:
                         st.session_state.current_user = u_in
                         st.session_state.saved_settings = u_data['settings']
                         st.rerun()
-                st.error("Invalid credentials or account needs re-registration")
+                st.error("Invalid credentials")
         with tab2:
             nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
             if st.button("Create Account"):
@@ -116,30 +115,30 @@ with st.sidebar:
     remains = 10 - u_data.get('login_count', 0)
     st.caption(f"Security sessions remaining: {remains}/10")
 
-    if st.button("📖 How It Works"):
-        @st.dialog("Why this pick?")
-        def show_help():
-            st.write("### 🧠 The Logic Breakdown")
-            st.info("The AI compares team strengths by multiplying your weights against Season WP% (Standings), ERA (Pitching), and combined AVG/SLG (Lineup).")
-        show_help()
-
     if st.button("Log Out"):
         cookie_manager.delete("mlb_session_token")
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
 
+    # --- 1. MODEL PRESETS ---
     s = st.session_state.saved_settings
-    preset = st.radio("Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get('preset','Balanced')))
+    preset_choice = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], 
+                             index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get('preset','Balanced')))
     
-    if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
-    elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
-    elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
+    if preset_choice == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
+    elif preset_choice == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
+    elif preset_choice == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
     else:
         w_std = st.slider("Standings %", 0, 100, s.get('w_std', 40))
         w_era = st.slider("Pitching %", 0, 100, s.get('w_era', 15))
         w_avg = st.slider("AVG %", 0, 100, s.get('w_avg', 20))
         w_slg = st.slider("SLG %", 0, 100, s.get('w_slg', 25))
+
+    # --- 2. IMPACT FEEDBACK ---
+    total_weight = w_std + w_era + w_avg + w_slg
+    if total_weight != 100:
+        st.warning(f"Weights total {total_weight}%. Accuracy is best at 100%.")
 
     sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
 
@@ -152,7 +151,7 @@ with st.sidebar:
     fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, index=(["None"] + all_teams).index(s.get('fav_team', 'None')))
 
     if st.button("💾 Save Settings"):
-        u_data['settings'] = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
+        u_data['settings'] = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset_choice}
         save_user_data(st.session_state.current_user, u_data)
         st.session_state.saved_settings = u_data['settings']
         st.success("Saved!")
@@ -183,21 +182,26 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
                     avgs.append(float(str(p_st.get('avg', '.000')).replace('.','0.')))
                     slgs.append(float(str(p_st.get('slg', '.400')).replace('.','0.')))
                 except: avgs.append(0.25); slgs.append(0.40)
-            p_name, era = "TBD", 4.10
+            
+            p_name, era, is_tbd = "TBD", 4.10, True
             if sd.get('pitchers'):
                 try: 
                     pid = sd['pitchers'][0]
                     p_name = ps.get(f"ID{pid}", {}).get('person', {}).get('fullName', "TBD")
-                    era = float(statsapi.player_stat_data(pid, group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', 4.10))
+                    era_val = statsapi.player_stat_data(pid, group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', '4.10')
+                    era = float(era_val) if era_val != '-.--' else 4.10
+                    is_tbd = False
                 except: pass
+            
             wpct = get_team_info(tid, year)
             c_std = wpct * (w_std/100)
             c_era = (4.1/max(0.1,era)) * (w_era/100)
             c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
             c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
-            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era, "wpct": wpct, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs))}
+            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era, "wpct": wpct, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs)), "is_tbd": is_tbd}
         
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
+        # Home Field Advantage (+3%)
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
         return {"prob_h": max(0.01, min(0.99, prob_h)), "box": box, "away": a_d, "home": h_d}
     except: return None
@@ -220,7 +224,7 @@ else:
             c1, c2, c3 = st.columns([1, 4, 1.5])
             with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
             with c2: 
-                status_label = " LIVE" if g.get('status') in ["In Progress", "Live"] else ""
+                status_label = " 🔴 LIVE" if g.get('status') in ["In Progress", "Live"] else ""
                 st.markdown(f"**{g['away_name']} @ {g['home_name']}** {status_label}")
                 st.write(f"Status: {g.get('status', 'Unknown')}")
             with c3:
@@ -230,10 +234,45 @@ else:
                 data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
                 if data:
                     res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
-                    conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
-                    st.markdown(f'<div style="background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
+                    prob_val = data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h']
+                    conf_pct = prob_val * 100
                     
-                    st.write("### 📊 AI Weight Comparison")
+                    # --- 3. CONFIDENCE INDICATOR ---
+                    if conf_pct > 58: conf_label, conf_color = "High", "#4CAF50"
+                    elif conf_pct > 53: conf_label, conf_color = "Medium", "#FF9800"
+                    else: conf_label, conf_color = "Low", "#f44336"
+
+                    st.markdown(f"""
+                        <div style="background: #1b2838; border: 2px solid {conf_color}; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;">
+                            🏅 Projection: <b>{res}</b> ({conf_pct:.1f}%) <br>
+                            <span style="font-size: 0.8em; color: {conf_color}">Confidence: {conf_label}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    # --- 4. PREDICTION BREAKDOWN ---
+                    with st.expander("🔍 Why this pick? (Impact Drivers)"):
+                        h, a = data['home'], data['away']
+                        b_std = h['c_std'] - a['c_std']
+                        b_era = h['c_era'] - a['c_era']
+                        b_avg = h['c_avg'] - a['c_avg']
+                        b_slg = h['c_slg'] - a['c_slg']
+                        
+                        breakdown_data = {
+                            "Factor": ["Standings/Record", "Starter Matchup", "Lineup AVG", "Lineup Power"],
+                            "Home Impact": [f"{'+' if b_std > 0 else ''}{b_std:.2f}", 
+                                           f"{'+' if b_era > 0 else ''}{b_era:.2f}",
+                                           f"{'+' if b_avg > 0 else ''}{b_avg:.2f}",
+                                           f"{'+' if b_slg > 0 else ''}{b_slg:.2f}"]
+                        }
+                        st.table(pd.DataFrame(breakdown_data))
+                        st.caption("Positive numbers favor the Home team. Negative favor Away.")
+
+                    # --- 5. TBD HANDLING ---
+                    if data['home']['is_tbd'] or data['away']['is_tbd']:
+                        st.warning("⚠️ Starter(s) not officially confirmed. Prediction uses league averages.")
+
+                    # Visual Comparison Tables
+                    st.write("### 📊 Data Comparison")
                     h, a = data['home'], data['away']
                     impact_df = pd.DataFrame([
                         {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
@@ -242,7 +281,7 @@ else:
                         {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
                     ])
                     st.table(impact_df)
-
+                    
                     st.write("### 🏟️ Live Boxscore")
                     box_data = data['box']
                     away_stats = box_data.get('away', {}).get('teamStats', {}).get('batting', {})
@@ -264,4 +303,4 @@ else:
                         st.write(f"**{g['home_name']} Starter:** {data['home']['p_name']} (ERA: {data['home']['era']})")
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             st.markdown('</div>', unsafe_allow_html=True)
-                              
+    
