@@ -53,10 +53,10 @@ if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
-if "user_pwd" not in st.session_state: # Fixed: Store password for saving later
+if "user_pwd" not in st.session_state:
     st.session_state.user_pwd = None
 
-# --- SIDEBAR (Login/Create Account) ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.title("⚾ MLB Intelligence Pro")
     
@@ -71,7 +71,7 @@ with st.sidebar:
                 if success:
                     st.session_state.authenticated = True
                     st.session_state.current_user = user_id
-                    st.session_state.user_pwd = input_pwd # Remembered for saving
+                    st.session_state.user_pwd = input_pwd
                     st.session_state.saved_settings = settings
                     st.rerun()
                 elif success is False:
@@ -84,18 +84,14 @@ with st.sidebar:
                     if os.path.exists(get_user_file(user_id)):
                         st.warning("⚠️ Profile already exists.")
                     else:
-                        initial_settings = {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"}
-                        save_settings(user_id, input_pwd, initial_settings)
-                        st.success("✅ Account Created! Now switch to Login.")
-                else:
-                    st.error("Enter Name and Password.")
+                        init_s = {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"}
+                        save_settings(user_id, input_pwd, init_s)
+                        st.success("✅ Created! Switch to Login.")
         st.stop()
 
-    # Logged In Sidebar View
     st.write(f"Logged in: **{st.session_state.current_user}**")
     if st.button("Log Out"):
         st.session_state.authenticated = False
-        st.session_state.user_pwd = None
         st.rerun()
     
     st.divider()
@@ -113,7 +109,6 @@ with st.sidebar:
         w_slg = st.slider("Lineup SLG %", 0, 100, value=s["w_slg"])
     
     sensitivity = st.slider("Stat Sensitivity", 1.0, 3.0, value=1.2, step=0.1)
-    
     try:
         all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
     except: all_teams = []
@@ -123,10 +118,9 @@ with st.sidebar:
 
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
-        # Fixed NameError by using session_state.user_pwd
         save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
         st.session_state.saved_settings = new_settings
-        st.success("Preferences Saved Professionally!")
+        st.success("Preferences Saved!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -163,6 +157,7 @@ def get_detailed_data(game_id, g_info, year, w_std, w_era, w_avg, w_slg, sensiti
                 except:
                     lineup.append({"Player": p_info.get('fullName', "TBD"), "AVG": ".250"})
                     avgs.append(0.250); slgs.append(0.400)
+            
             p_list = side_data.get('pitchers', [])
             p_name, era = "TBD", 4.10
             if p_list:
@@ -213,7 +208,31 @@ for g in sorted_games:
                 winner = g['home_name'] if p_h > 0.5 else g['away_name']
                 st.markdown(f'<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>', unsafe_allow_html=True)
                 
+                # --- BOX SCORE (Fixed Data Path) ---
+                if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
+                    st.markdown("### 📊 Box Score")
+                    try:
+                        # Use schedule data if boxscore_data is still populating
+                        r_a = g.get('away_score', 0)
+                        r_h = g.get('home_score', 0)
+                        # Attempt to get hits/errors from the live boxscore
+                        b = data['box']
+                        h_a = b['away']['teamStats']['batting'].get('hits', '-')
+                        h_h = b['home']['teamStats']['batting'].get('hits', '-')
+                        e_a = b['away']['teamStats']['fielding'].get('errors', 0)
+                        e_h = b['home']['teamStats']['fielding'].get('errors', 0)
+                        
+                        box_df = pd.DataFrame({
+                            "Team": [g['away_name'], g['home_name']],
+                            "R": [r_a, r_h],
+                            "H": [h_a, h_h],
+                            "E": [e_a, e_h]
+                        })
+                        st.dataframe(box_df, use_container_width=True, hide_index=True)
+                    except: st.caption("Box score syncing...")
+
                 # --- LINEUPS ---
+                st.markdown("### 📋 Lineups & Pitching")
                 col_a, col_h = st.columns(2)
                 with col_a:
                     st.write(f"**{g['away_name']}**")
@@ -223,20 +242,6 @@ for g in sorted_games:
                     st.write(f"**{g['home_name']}**")
                     st.caption(f"SP: {data['home']['p_name']} ({data['home']['era']})")
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-
-                # --- BOX SCORE (Always appears if game is final or live) ---
-                if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
-                    st.markdown("### 📊 Box Score")
-                    b = data['box']
-                    try:
-                        box_df = pd.DataFrame({
-                            "Team": [g['away_name'], g['home_name']],
-                            "R": [b['away']['teamStats']['batting']['runs'], b['home']['teamStats']['batting']['runs']],
-                            "H": [b['away']['teamStats']['batting']['hits'], b['home']['teamStats']['batting']['hits']],
-                            "E": [b['away']['teamStats']['fielding'].get('errors', 0), b['home']['teamStats']['fielding'].get('errors', 0)]
-                        })
-                        st.dataframe(box_df, use_container_width=True, hide_index=True)
-                    except: st.caption("Waiting for score data...")
             else: st.info("Loading detailed data...")
         st.markdown('</div>', unsafe_allow_html=True)
-                    
+                
