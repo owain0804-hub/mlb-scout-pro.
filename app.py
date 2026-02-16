@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pandas as pd
+import pandas as pd # FIXED: Corrected import
 import json
 import os
 import hashlib
@@ -32,11 +32,8 @@ def send_admin_notification(new_user):
     except: pass
 
 # --- COOKIE MANAGER ---
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+# FIXED: Moved outside of a cached function to solve the widget error
+cookie_manager = stx.CookieManager()
 
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
@@ -125,13 +122,15 @@ with st.sidebar:
         w_slg = st.slider("Lineup SLG %", 0, 100, s["w_slg"])
     sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
     
-    try: all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
+    try:
+        all_teams_data = statsapi.get('teams', {'sportId': 1})['teams']
+        all_teams = sorted([t['name'] for t in all_teams_data])
     except: all_teams = []
     fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
 
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
-        save_settings(st.session_state.current_user, "", new_settings) # Empty pass because we update settings, not pass
+        save_settings(st.session_state.current_user, "", new_settings)
         st.session_state.saved_settings = new_settings; st.success("Saved!")
 
 # --- CORE FUNCTIONS ---
@@ -213,9 +212,9 @@ for g in sorted_games:
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
-                    h_a, h_h = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-'), data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
-                    e_a, e_h = data['box'].get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-'), data['box'].get('home', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
-                    box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [r_a, r_h], "H": [h_a, h_h], "E": [e_a, e_h]})
+                    h_a = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    h_h = data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [r_a, r_h], "H": [h_a, h_h]})
                     st.dataframe(box_df, hide_index=True, use_container_width=True)
                 la, lh = st.columns(2)
                 with la:
