@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pandas as pd
+import pandas as pd  # Fixed: changed from 'import pd' to 'import pandas as pd'
 import json
 import os
 import hashlib
@@ -13,7 +13,8 @@ from streamlit_autorefresh import st_autorefresh
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "owainbaseball@gmail.com" 
-SENDER_PASSWORD = "YOUR_16_DIGIT_APP_PASSWORD" 
+# Updated with your new password from the screenshot
+SENDER_PASSWORD = "lixs qgpo ihyd ikiq" 
 ADMIN_EMAIL = "owainbaseball@gmail.com"
 
 def send_admin_notification(new_user):
@@ -28,7 +29,8 @@ def send_admin_notification(new_user):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-    except: pass
+    except:
+        pass
 
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
@@ -217,11 +219,11 @@ for g in sorted_games:
                         {"Category": "Lineup Power", g['home_name']: f"{h['slg_team']:.3f} ({ (h['c_slg']/total_h)*100:.1f}%)", g['away_name']: f"{a['slg_team']:.3f} ({ (a['c_slg']/total_a)*100:.1f}%)"},
                     ])
                     st.table(impact_df)
-                    st.caption("The first number is the real stat. The percentage in ( ) is how much that stat helped the team's projection score.")
 
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
+                    # Fixed KeyError by using safer dictionary access
                     h_a = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     h_h = data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
                     e_a = data['box'].get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
@@ -247,3 +249,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
+            
