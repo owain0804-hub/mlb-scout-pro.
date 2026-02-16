@@ -41,6 +41,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
+    .live-badge { background: #ff4b4b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -56,14 +57,9 @@ def save_settings(username, password, settings_data, login_count=0):
             with open(filename, "r") as f:
                 existing_hash = json.load(f).get("password_hash")
         except: pass
-    
     new_hash = hash_password(password) if password else existing_hash
     with open(filename, "w") as f:
-        json.dump({
-            "password_hash": new_hash, 
-            "settings": settings_data,
-            "login_count": login_count # Track login frequency
-        }, f)
+        json.dump({"password_hash": new_hash, "settings": settings_data, "login_count": login_count}, f)
 
 def load_settings(username, password):
     filename = get_user_file(username)
@@ -72,13 +68,9 @@ def load_settings(username, password):
             with open(filename, "r") as f:
                 data = json.load(f)
                 if data.get("password_hash") == hash_password(password):
-                    # Increment counter on successful login
                     current_count = data.get("login_count", 0) + 1
                     new_count = 0 if current_count >= 10 else current_count
-                    
-                    # Update the file with the new count
                     save_settings(username, None, data.get("settings"), login_count=new_count)
-                    
                     return data.get("settings"), True, new_count
         except: pass
     return None, False, 0
@@ -126,12 +118,10 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
-    
     s = st.session_state.get("saved_settings", {})
     preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
     current_preset = s.get("preset", "Balanced")
     preset_idx = preset_options.index(current_preset) if current_preset in preset_options else 0
-    
     preset = st.radio("Model Presets", preset_options, index=preset_idx)
     
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
@@ -209,44 +199,63 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
 st.header("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Select Date", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
-unique_g = {g['game_id']: g for g in sched}.values()
 
-fav = st.session_state.get("saved_settings", {}).get("fav_team", "None")
-sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
+if not sched:
+    st.info("📅 No games today ⚾")
+else:
+    unique_g = {g['game_id']: g for g in sched}.values()
+    fav = st.session_state.get("saved_settings", {}).get("fav_team", "None")
+    sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
-for g in sorted_games:
-    with st.container():
-        st.markdown('<div class="matchup-card">', unsafe_allow_html=True)
-        c1, c2, c3 = st.columns([1, 4, 1.5])
-        with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
-        with c2: st.markdown(f"**{g['away_name']} @ {g['home_name']}**")
-        with c3:
-            if st.button("Analyze", key=f"b_{g['game_id']}"): st.session_state.active_game_id = g['game_id']
-        
-        if st.session_state.get("active_game_id") == g['game_id']:
-            data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
-            if data:
-                res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
-                conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
-                st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
-                
-                with st.expander("📊 Comparison Breakdown"):
-                    h, a = data['home'], data['away']
-                    impact_df = pd.DataFrame([
-                        {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
-                        {"Category": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}"},
-                        {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f}", g['away_name']: f"{a['avg_team']:.3f}"},
-                        {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
-                    ])
-                    st.table(impact_df)
-                
-                la, lh = st.columns(2)
-                with la:
-                    st.write(f"**{g['away_name']}**")
-                    st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
-                with lh:
-                    st.write(f"**{g['home_name']}**")
-                    st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
-            else: st.info("Loading analysis...")
-        st.markdown('</div>', unsafe_allow_html=True)
+    for g in sorted_games:
+        with st.container():
+            st.markdown('<div class="matchup-card">', unsafe_allow_html=True)
+            c1, c2, c3 = st.columns([1, 4, 1.5])
+            with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=50)
+            with c2: 
+                status_label = f" <span class='live-badge'>LIVE</span>" if g.get('status') in ["In Progress", "Live"] else ""
+                st.markdown(f"**{g['away_name']} @ {g['home_name']}** {status_label}", unsafe_allow_html=True)
+                st.write(f"Status: {g.get('status', 'Unknown')}")
+            with c3:
+                if st.button("Analyze", key=f"b_{g['game_id']}"): st.session_state.active_game_id = g['game_id']
             
+            if st.session_state.get("active_game_id") == g['game_id']:
+                data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
+                if data:
+                    res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
+                    conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
+                    st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
+                    
+                    # LIVE BOXSCORE LOGIC
+                    st.write("### 🏟️ Live Boxscore")
+                    box_data = data['box']
+                    away_stats = box_data.get('away', {}).get('teamStats', {}).get('batting', {})
+                    home_stats = box_data.get('home', {}).get('teamStats', {}).get('batting', {})
+                    
+                    live_df = pd.DataFrame({
+                        "Team": [g['away_name'], g['home_name']],
+                        "Runs": [g.get('away_score', 0), g.get('home_score', 0)],
+                        "Hits": [away_stats.get('hits', 0), home_stats.get('hits', 0)],
+                        "Errors": [away_stats.get('errors', 0), home_stats.get('errors', 0)]
+                    })
+                    st.table(live_df)
+
+                    with st.expander("📊 Comparison Breakdown"):
+                        h, a = data['home'], data['away']
+                        impact_df = pd.DataFrame([
+                            {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
+                            {"Category": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}"},
+                            {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f}", g['away_name']: f"{a['avg_team']:.3f}"},
+                            {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
+                        ])
+                        st.table(impact_df)
+                    
+                    la, lh = st.columns(2)
+                    with la:
+                        st.write(f"**{g['away_name']} Lineup**")
+                        st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
+                    with lh:
+                        st.write(f"**{g['home_name']} Lineup**")
+                        st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
+                else: st.info("Loading analysis...")
+            st.markdown('</div>', unsafe_allow_html=True)
