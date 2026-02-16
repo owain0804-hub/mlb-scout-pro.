@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pandas as pd  # FIXED: Ensures 'pd' is recognized throughout the app
+import pandas as pd  # FIXED: Required for st.table(pd.DataFrame(...))
 import json
 import os
 import hashlib
@@ -31,7 +31,6 @@ def load_users():
         try:
             with open(USERS_FILE, 'r') as f:
                 users = json.load(f)
-            # Repair legacy users to ensure 5 weights exist
             for u in users:
                 if "weights" not in users[u] or len(users[u]["weights"]) < 5:
                     users[u]["weights"] = [25, 25, 15, 20, 15]
@@ -154,5 +153,63 @@ def analyze_game(gid, g_info, year, weights):
                 pid = sd['pitchers'][0]; p_name = ps[f"ID{pid}"]['person']['fullName']
                 era = float(statsapi.player_stat_data(pid, group="pitching")['stats'][0]['stats'].get('era', '4.50'))
             except: pass
-        return {"wpct": get_win_pct(tid, year), "era": era, "bp_era": get_bp_era(tid, year), "avg": sum(avgs)/max(1, len(avgs)), "slg":
+        # FIXED: Ensured the dictionary is properly closed with a '}'
+        return {"wpct": get_win_pct(tid, year), "era": era, "bp_era": get_bp_era(tid, year), "avg": sum(avgs)/max(1, len(avgs)), "slg": sum(slgs)/max(1, len(slgs)), "p": p_name, "lineup": lineup}
+
+    a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
+    imp1 = {
+        "Win %": (h['wpct'] - a['wpct']) * 0.25,
+        "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * 0.25,
+        "Bullpen": ((4.5/max(0.1, h['bp_era'])) - (4.5/max(0.1, a['bp_era']))) * 0.15,
+        "AVG": (h['avg'] - a['avg']) * 1.5,
+        "SLG": (h['slg'] - a['slg']) * 1.2
+    }
+    p1 = 0.5 + sum(imp1.values()) + 0.02
+    
+    uw = [v/100 for v in weights]
+    imp2 = {
+        "Win %": (h['wpct'] - a['wpct']) * uw[0],
+        "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * uw[1],
+        "Bullpen": ((4.5/max(0.1, h['bp_era'])) - (4.5/max(0.1, a['bp_era']))) * uw[2],
+        "AVG": (h['avg'] - a['avg']) * (uw[3]*10),
+        "SLG": (h['slg'] - a['slg']) * (uw[4]*7.5)
+    }
+    p2 = 0.5 + sum(imp2.values()) + 0.02
+    return {"prob1": max(0.01, min(0.99, p1)), "prob2": max(0.01, min(0.99, p2)), "away": a, "home": h, "imp1": imp1, "imp2": imp2}
+
+# --- MAIN UI ---
+dt = st.date_input("Date", datetime.now())
+sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
+sorted_sched = sorted(sched, key=lambda x: (x['home_name'] != fav and x['away_name'] != fav))
+
+for g in sorted_sched:
+    st.markdown(f'<div class="matchup-card"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" class="team-logo"><div><b>{g["away_name"]} @ {g["home_name"]}</b></div><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" class="team-logo"></div>', unsafe_allow_html=True)
+    if st.button("Analyze", key=g['game_id'], use_container_width=True):
+        data = analyze_game(g['game_id'], g, dt.year, weights_list)
+        p_val = data['prob1'] if sel_m == 1 else data['prob2']
+        active_imps = data['imp1'] if sel_m == 1 else data['imp2']
+        res = g['home_name'] if p_val > 0.5 else g['away_name']
+        
+        st.markdown(f'<div class="mobile-row"><div class="{"metric-box" if sel_m==1 else "metric-box-2"}"><small>PROBABILITY {sel_m}</small><br><b>{max(p_val, 1-p_val)*100:.1f}%</b> <span style="color:#4ade80">{res}</span></div></div>', unsafe_allow_html=True)
+        
+        st.write("### 🧠 AI Logic Breakdown")
+        with st.container():
+            st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+            for cat, imp in active_imps.items():
+                team_edge = g['home_name'] if imp > 0 else g['away_name']
+                color = "#4ade80" if team_edge == g['home_name'] else "#3b82f6"
+                st.markdown(f"**{cat}:** <span style='color:{color}'>{team_edge} Edge</span> <span class='impact-tag'>(+{abs(imp)*100:.1f}% to Win Prob)</span>", unsafe_allow_html=True)
+            st.write(f"*Includes +2.0% Home Edge for {g['home_name']}.*")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        st.write("### 🏟️ Live Score")
+        st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" width="20"> {data["away"]["p"]} ({data["away"]["era"]})</div>', unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
+        with c2:
+            st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" width="20"> {data["home"]["p"]} ({data["home"]["era"]})</div>', unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
+        
