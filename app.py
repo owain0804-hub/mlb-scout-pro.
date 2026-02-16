@@ -227,6 +227,17 @@ else:
                     conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                     st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                     
+                    # AI WEIGHT COMPARISON (MOVED TO TOP)
+                    st.write("### 📊 AI Weight Comparison")
+                    h, a = data['home'], data['away']
+                    impact_df = pd.DataFrame([
+                        {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
+                        {"Category": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}"},
+                        {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f}", g['away_name']: f"{a['avg_team']:.3f}"},
+                        {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
+                    ])
+                    st.table(impact_df)
+
                     # LIVE BOXSCORE
                     st.write("### 🏟️ Live Boxscore")
                     box_data = data['box']
@@ -252,16 +263,6 @@ else:
                         st.markdown(f"""<div class='pitcher-stat'><b>🔥 {g['home_name']} Starter</b><br>
                                     {data['home']['p_name']} (ERA: {data['home']['era']})</div>""", unsafe_allow_html=True)
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
-
-                    with st.expander("📊 AI Weight Comparison"):
-                        h, a = data['home'], data['away']
-                        impact_df = pd.DataFrame([
-                            {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
-                            {"Category": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}"},
-                            {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f}", g['away_name']: f"{a['avg_team']:.3f}"},
-                            {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
-                        ])
-                        st.table(impact_df)
                 else: st.info("Loading analysis...")
             st.markdown('</div>', unsafe_allow_html=True)
-                    
+                
