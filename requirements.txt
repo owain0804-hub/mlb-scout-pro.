@@ -1,4 +1,5 @@
 streamlit
 MLB-StatsAPI
 pandas
+extra-streamlit-components
 streamlit-autorefresh
