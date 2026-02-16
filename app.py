@@ -1,10 +1,9 @@
 import streamlit as st
 import statsapi
-import pandas as pd
+import pd
 import json
 import os
 import hashlib
-import time
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 import extra_streamlit_components as stx
@@ -20,6 +19,7 @@ def apply_pro_styles():
         .matchup-card { background: #0d1117; border: 1px solid #30363d; border-radius: 12px; padding: 15px; margin-bottom: 15px; display: flex; align-items: center; justify-content: space-between; }
         .pitcher-header { background: #161b22; border-bottom: 2px solid #3fb950; padding: 8px; margin-bottom: 5px; border-radius: 4px 4px 0 0; font-weight: bold; display: flex; align-items: center; gap: 10px; }
         .team-logo { width: 40px; height: 40px; }
+        .impact-tag { font-size: 0.85em; color: #94a3b8; margin-left: 8px; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -51,32 +51,26 @@ if not st.session_state.auth and saved_user and saved_user in users_db:
 
 # --- LOGIN ---
 if not st.session_state.auth:
-    st.title("MLB Scout Pro")
+    st.title("⚾ MLB Scout Pro")
     t1, t2 = st.tabs(["Login", "Register"])
     with t1:
         u, p = st.text_input("Username"), st.text_input("Password", type="password")
         if st.button("Enter"):
-            # Fix KeyError: Ensure user exists and has a 'pw' key
             if u in users_db and users_db[u].get('pw') == hash_pw(p):
                 st.session_state.auth, st.session_state.username = True, u
                 cookie_manager.set("mlb_login", u, expires_at=datetime(2026, 12, 31))
                 st.rerun()
-            else: st.error("Invalid credentials.")
     with t2:
         nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
         if st.button("Create Account") and nu and np:
-            # Added 5th weight for Bullpen by default
             users_db[nu] = {"pw": hash_pw(np), "fav": "None", "weights": [25, 25, 15, 20, 15], "display_model": 1}
             save_users(users_db); st.success("Ready! Please Login.")
     st.stop()
 
 # --- SIDEBAR & DATA VALIDATION ---
 user_data = users_db.get(st.session_state.username, {})
-
-# Fix IndexError: Ensure weights list has 5 elements
 weights_list = user_data.get("weights", [25, 25, 15, 20, 15])
-if len(weights_list) < 5:
-    weights_list = [25, 25, 15, 20, 15] # Reset to default if legacy user
+if len(weights_list) < 5: weights_list = [25, 25, 15, 20, 15]
 
 with st.sidebar:
     st.write(f"User: **{st.session_state.username}**")
@@ -88,19 +82,14 @@ with st.sidebar:
     fav_idx = (["None"] + all_teams).index(fav_team_val) if fav_team_val in (["None"] + all_teams) else 0
     fav = st.selectbox("Favorite Team", ["None"] + all_teams, index=fav_idx)
     st.divider()
-    st.write("### Model 2 Weights")
+    st.write("### 🎚️ Model 2 Weights")
     w_win = st.slider("Win %", 0, 100, weights_list[0])
     w_era = st.slider("Starter ERA", 0, 100, weights_list[1])
     w_bp = st.slider("Bullpen ERA", 0, 100, weights_list[2])
     w_avg = st.slider("Lineup AVG", 0, 100, weights_list[3])
     w_slg = st.slider("Lineup SLG", 0, 100, weights_list[4])
-    
     if st.button("Save All Settings"):
-        users_db[st.session_state.username].update({
-            "fav": fav, 
-            "weights": [w_win, w_era, w_bp, w_avg, w_slg], 
-            "display_model": sel_m
-        })
+        users_db[st.session_state.username].update({"fav": fav, "weights": [w_win, w_era, w_bp, w_avg, w_slg], "display_model": sel_m})
         save_users(users_db); st.toast("Saved!"); st.rerun()
     if st.button("Logout"): cookie_manager.delete("mlb_login"); st.session_state.auth = False; st.rerun()
 
@@ -125,7 +114,6 @@ def analyze_game(gid, g_info, year, weights):
     box = statsapi.boxscore_data(gid)
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        # Safety filter for starting lineup
         starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x['battingOrder'])
         lineup, avgs, slgs = [], [], []
         for p in starters:
@@ -144,17 +132,28 @@ def analyze_game(gid, g_info, year, weights):
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
-    # Model 1
-    s1_h = (h['wpct']*0.25) + ((4.5/max(0.1, h['era']))*0.25) + ((4.5/max(0.1, h['bp_era']))*0.15) + (h['avg']*1.5) + (h['slg']*1.2)
-    s1_a = (a['wpct']*0.25) + ((4.5/max(0.1, a['era']))*0.25) + ((4.5/max(0.1, a['bp_era']))*0.15) + (a['avg']*1.5) + (a['slg']*1.2)
-    p1 = 0.5 + (s1_h - s1_a) + 0.02
+    # Calculate Model 1 Impacts
+    imp1 = {
+        "Win %": (h['wpct'] - a['wpct']) * 0.25,
+        "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * 0.25,
+        "Bullpen": ((4.5/max(0.1, h['bp_era'])) - (4.5/max(0.1, a['bp_era']))) * 0.15,
+        "AVG": (h['avg'] - a['avg']) * 1.5,
+        "SLG": (h['slg'] - a['slg']) * 1.2
+    }
+    p1 = 0.5 + sum(imp1.values()) + 0.02
     
-    # Model 2
+    # Calculate Model 2 Impacts
     uw = [v/100 for v in weights]
-    s2_h = (h['wpct']*uw[0]) + ((4.5/max(0.1, h['era']))*uw[1]) + ((4.5/max(0.1, h['bp_era']))*uw[2]) + (h['avg']*(uw[3]*10)) + (h['slg']*(uw[4]*7.5))
-    s2_a = (a['wpct']*uw[0]) + ((4.5/max(0.1, a['era']))*uw[1]) + ((4.5/max(0.1, a['bp_era']))*uw[2]) + (a['avg']*(uw[3]*10)) + (a['slg']*(uw[4]*7.5))
-    p2 = 0.5 + (s2_h - s2_a) + 0.02
-    return {"prob1": max(0.01, min(0.99, p1)), "prob2": max(0.01, min(0.99, p2)), "away": a, "home": h}
+    imp2 = {
+        "Win %": (h['wpct'] - a['wpct']) * uw[0],
+        "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * uw[1],
+        "Bullpen": ((4.5/max(0.1, h['bp_era'])) - (4.5/max(0.1, a['bp_era']))) * uw[2],
+        "AVG": (h['avg'] - a['avg']) * (uw[3]*10),
+        "SLG": (h['slg'] - a['slg']) * (uw[4]*7.5)
+    }
+    p2 = 0.5 + sum(imp2.values()) + 0.02
+    
+    return {"prob1": max(0.01, min(0.99, p1)), "prob2": max(0.01, min(0.99, p2)), "away": a, "home": h, "imp1": imp1, "imp2": imp2}
 
 # --- MAIN UI ---
 dt = st.date_input("Date", datetime.now())
@@ -167,26 +166,29 @@ for g in sorted_sched:
     if st.button("Analyze", key=g['game_id'], use_container_width=True):
         data = analyze_game(g['game_id'], g, dt.year, weights_list)
         p_val = data['prob1'] if sel_m == 1 else data['prob2']
+        active_imps = data['imp1'] if sel_m == 1 else data['imp2']
         res = g['home_name'] if p_val > 0.5 else g['away_name']
+        
         st.markdown(f'<div class="mobile-row"><div class="{"metric-box" if sel_m==1 else "metric-box-2"}"><small>PROBABILITY {sel_m}</small><br><b>{max(p_val, 1-p_val)*100:.1f}%</b> <span style="color:#4ade80">{res}</span></div></div>', unsafe_allow_html=True)
         
-        st.write("### AI Logic Breakdown")
-        h, a = data['home'], data['away']
-        def get_edge(hv, av, low=False): return g['home_name'] if (hv < av if low else hv > av) else g['away_name']
-        edges = {"Win %": get_edge(h['wpct'], a['wpct']), "Starter (ERA)": get_edge(h['era'], a['era'], True), "Bullpen (Relief ERA)": get_edge(h['bp_era'], a['bp_era'], True), "Hitting (AVG)": get_edge(h['avg'], a['avg']), "Power (SLG)": get_edge(h['slg'], a['slg'])}
+        st.write("### 🧠 AI Logic Breakdown")
         with st.container():
             st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
-            for c, t in edges.items():
-                st.write(f"**{c}:** <span style='color:{"#4ade80" if t == g["home_name"] else "#3b82f6"}'>{t} Edge</span>", unsafe_allow_html=True)
-            st.write(f"*Includes +2% Home Edge for {g['home_name']}.*"); st.markdown('</div>', unsafe_allow_html=True)
+            for category, impact in active_imps.items():
+                edge_team = g['home_name'] if impact > 0 else g['away_name']
+                color = "#4ade80" if edge_team == g['home_name'] else "#3b82f6"
+                impact_pct = abs(impact) * 100
+                st.markdown(f"**{category}:** <span style='color:{color}'>{edge_team} Edge</span> <span class='impact-tag'>(+{impact_pct:.1f}% to Win Prob)</span>", unsafe_allow_html=True)
+            st.write(f"*Includes +2.0% Home Edge for {g['home_name']}.*")
+            st.markdown('</div>', unsafe_allow_html=True)
         
-        st.write("### LiveScore")
+        st.write("### 🏟️ Live Score")
         st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" width="20"> {a["p"]} ({a["era"]})</div>', unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(a['lineup']), hide_index=True)
+            st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" width="20"> {data["away"]["p"]} ({data["away"]["era"]})</div>', unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
         with c2:
-            st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" width="20"> {h["p"]} ({h["era"]})</div>', unsafe_allow_html=True)
-            st.dataframe(pd.DataFrame(h['lineup']), hide_index=True)
+            st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" width="20"> {data["home"]["p"]} ({data["home"]["era"]})</div>', unsafe_allow_html=True)
+            st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
     
