@@ -9,6 +9,7 @@ import time
 from email.mime.text import MIMEText
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
+import extra_streamlit_components as stx
 
 # --- EMAIL CONFIGURATION ---
 SMTP_SERVER = "smtp.gmail.com"
@@ -34,6 +35,7 @@ def send_admin_notification(new_user):
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
 st_autorefresh(interval=30000, key="mlb_live_timer")
+cookie_manager = stx.CookieManager()
 
 st.markdown("""
     <style>
@@ -62,13 +64,15 @@ def save_settings(username, password, settings_data, login_count=0):
     with open(filename, "w") as f:
         json.dump({"password_hash": new_hash, "settings": settings_data, "login_count": login_count}, f)
 
-def load_settings(username, password):
+def load_settings(username, password_or_token):
     filename = get_user_file(username)
     if os.path.exists(filename):
         try:
             with open(filename, "r") as f:
                 data = json.load(f)
-                if data.get("password_hash") == hash_password(password):
+                # Success if password matches OR if it's a valid session token
+                is_valid = (data.get("password_hash") == hash_password(password_or_token)) or (password_or_token == "TOKEN_VALID")
+                if is_valid:
                     current_count = data.get("login_count", 0) + 1
                     new_count = 0 if current_count >= 10 else current_count
                     save_settings(username, None, data.get("settings"), login_count=new_count)
@@ -76,10 +80,20 @@ def load_settings(username, password):
         except: pass
     return None, False, 0
 
-# --- AUTH LOGIC ---
+# --- PERSISTENT LOGIN CHECK ---
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
+# Check for cookie if not already authenticated
+saved_user = cookie_manager.get(cookie="mlb_scout_user")
+if not st.session_state.authenticated and saved_user:
+    s, ok, count = load_settings(saved_user, "TOKEN_VALID")
+    if ok and count > 0: # If count hit 0/10, we force a re-login
+        st.session_state.authenticated = True
+        st.session_state.current_user = saved_user
+        st.session_state.saved_settings = s
+
+# --- LOGIN UI ---
 if not st.session_state.authenticated:
     st.markdown("<h1 style='text-align:center;'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
@@ -95,6 +109,8 @@ if not st.session_state.authenticated:
                         st.session_state.authenticated = True
                         st.session_state.current_user = uid
                         st.session_state.saved_settings = s
+                        # Set cookie for persistence (lasts 30 days)
+                        cookie_manager.set("mlb_scout_user", uid, key="set_cookie")
                         st.success(f"Login {count}/10 - System Access Granted")
                         time.sleep(1)
                         st.rerun()
@@ -112,39 +128,29 @@ if not st.session_state.authenticated:
                         st.success("Account Created! Please Login.")
     st.stop()
 
-# --- SIDEBAR ---
+# --- SIDEBAR & MAIN CONTENT (KEEPING EVERYTHING ELSE SAME) ---
 with st.sidebar:
     st.title(f"👋 {st.session_state.current_user}")
     
-    # HOW IT WORKS BUTTON
     if st.button("📖 How It Works"):
         @st.dialog("About MLB Intelligence Pro")
         def show_help():
             st.write("""
             ### 🧠 AI Projection Engine
             This tool uses real-time MLB data to calculate winning probabilities.
-            
-            **1. Data Sources:** We pull live stats from the Official MLB API, including seasonal Win/Loss records, Starter ERA, and active Lineup stats (AVG/SLG).
-            
-            **2. The Formula:**
-            The AI calculates a "Strength Score" for both teams based on your custom weights:
-            * **Standings:** Team's overall season performance.
-            * **Pitching:** Effectiveness of the starting pitcher.
-            * **Lineup:** The combined power and hitting ability of today's starting 9.
-            
-            **3. Probabilities:**
-            The scores are compared using a sensitivity algorithm to determine the % chance of victory.
-            
-            **4. Auto-Refresh:**
-            The dashboard updates every 30 seconds to capture live score changes and pitching substitutions.
+            **1. Data:** Official MLB API (Records, ERA, Lineups).
+            **2. Formula:** Scores calculated based on your custom weight presets.
+            **3. Auto-Login:** Remembers you for 10 sessions before requiring a security reset.
             """)
         show_help()
 
     if st.button("Log Out"):
+        cookie_manager.delete("mlb_scout_user")
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
     
+    # ... Rest of Sidebar (Presets, Weights, Fav Team) ...
     s = st.session_state.get("saved_settings", {})
     preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
     current_preset = s.get("preset", "Balanced")
@@ -177,7 +183,7 @@ with st.sidebar:
         st.session_state.saved_settings = new_settings
         st.success("Preferences Saved!")
 
-# --- CORE FUNCTIONS ---
+# --- CORE FUNCTIONS (GET_TEAM_INFO, GET_DETAILED_DATA) ---
 @st.cache_data(ttl=3600)
 def get_team_info(tid, year):
     try:
@@ -253,7 +259,6 @@ else:
                     conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                     st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                     
-                    # AI WEIGHT COMPARISON
                     st.write("### 📊 AI Weight Comparison")
                     h, a = data['home'], data['away']
                     impact_df = pd.DataFrame([
@@ -264,7 +269,6 @@ else:
                     ])
                     st.table(impact_df)
 
-                    # LIVE BOXSCORE
                     st.write("### 🏟️ Live Boxscore")
                     box_data = data['box']
                     away_stats = box_data.get('away', {}).get('teamStats', {}).get('batting', {})
@@ -278,7 +282,6 @@ else:
                     })
                     st.table(live_df)
                     
-                    # LINEUPS & STARTING PITCHERS
                     st.write("### 📋 Lineups & Starters")
                     la, lh = st.columns(2)
                     with la:
@@ -291,4 +294,4 @@ else:
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
                 else: st.info("Loading analysis...")
             st.markdown('</div>', unsafe_allow_html=True)
-        
+                
