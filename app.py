@@ -4,12 +4,14 @@ import pandas as pd
 import json
 import os
 import hashlib
+import time
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
 import extra_streamlit_components as stx
 
 # --- MOBILE & UI STYLING ---
 def apply_pro_styles():
+    # NOTE: This is a standard string (not an f-string) to avoid CSS syntax errors
     st.markdown("""
         <style>
         .mobile-row {
@@ -114,6 +116,7 @@ with st.sidebar:
     # Favorite Team
     all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
     curr_fav = users_db[st.session_state.username].get("fav", "None")
+    # Safe index finding
     fav_idx = (["None"] + all_teams).index(curr_fav) if curr_fav in (["None"] + all_teams) else 0
     fav = st.selectbox("Favorite Team", ["None"] + all_teams, index=fav_idx)
     
@@ -186,7 +189,6 @@ def analyze_game(gid, g_info, year, weights):
 
     # --- PROBABILITY 2 (USER SLIDERS) ---
     # Normalize weights to ensure they don't break the math if they add up to weird numbers
-    # We treat them as ratios relative to 100
     u_win, u_era, u_avg, u_slg = weights[0]/100, weights[1]/100, weights[2]/100, weights[3]/100
     
     s2_h = (h['wpct']*u_win) + ((4.5/max(0.1, h['era']))*u_era) + (h['avg']*(u_avg*10)) + (h['slg']*(u_slg*7.5))
@@ -203,8 +205,17 @@ user_weights = users_db[st.session_state.username].get("weights", [30, 30, 20, 2
 
 for g in sched:
     is_fav = (g['home_name'] == fav_team or g['away_name'] == fav_team)
+    
+    # --- FIX: Define style outside f-string to prevent SyntaxError ---
+    if is_fav:
+        card_style = "border-color: #eab308; border-width: 2px;"
+    else:
+        card_style = ""
+        
     with st.container():
-        st.markdown(f'<div class="matchup-card" style="{"border-color:#eab308" if is_fav else ""}"><b>{g["away_name"]} @ {g["home_name"]}</b></div>', unsafe_allow_html=True)
+        # Using the pre-calculated card_style variable
+        st.markdown(f'<div class="matchup-card" style="{card_style}"><b>{g["away_name"]} @ {g["home_name"]}</b></div>', unsafe_allow_html=True)
+        
         if st.button("Analyze", key=g['game_id'], use_container_width=True):
             data = analyze_game(g['game_id'], g, dt.year, user_weights)
             
@@ -216,7 +227,6 @@ for g in sched:
             }))
             
             # 2. PROBABILITY & EDGE (Side-by-Side)
-            # Determine winners
             res1 = g['home_name'] if data['prob1'] > 0.5 else g['away_name']
             res2 = g['home_name'] if data['prob2'] > 0.5 else g['away_name']
             conf1 = max(data["prob1"], 1-data["prob1"])*100
@@ -245,5 +255,9 @@ for g in sched:
             # 3. PITCHERS & LINEUPS
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown(f'<div class="pitcher-header">{data["away"]["p"]} (ERA: {data
+                st.markdown(f'<div class="pitcher-header">{data["away"]["p"]} (ERA: {data["away"]["era"]})</div>', unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
+            with c2:
+                st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (ERA: {data["home"]["era"]})</div>', unsafe_allow_html=True)
+                st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
     
