@@ -1,10 +1,11 @@
 import streamlit as st
 import statsapi
-import pandas as pd  # Fixed: changed from 'import pd' to 'import pandas as pd'
+import pandas as pd
 import json
 import os
 import hashlib
 import smtplib
+import extra_streamlit_components as stx
 from email.mime.text import MIMEText
 from datetime import datetime
 from streamlit_autorefresh import st_autorefresh
@@ -13,7 +14,6 @@ from streamlit_autorefresh import st_autorefresh
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SENDER_EMAIL = "owainbaseball@gmail.com" 
-# Updated with your new password from the screenshot
 SENDER_PASSWORD = "lixs qgpo ihyd ikiq" 
 ADMIN_EMAIL = "owainbaseball@gmail.com"
 
@@ -29,8 +29,14 @@ def send_admin_notification(new_user):
             server.starttls()
             server.login(SENDER_EMAIL, SENDER_PASSWORD)
             server.send_message(msg)
-    except:
-        pass
+    except: pass
+
+# --- COOKIE MANAGER ---
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 # --- PAGE CONFIG & THEME ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
@@ -45,8 +51,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- SESSION & STORAGE ---
-SESSION_FILE = "active_session.json"
+# --- STORAGE LOGIC ---
 def hash_password(password): return hashlib.sha256(str.encode(password)).hexdigest()
 def get_user_file(username): return f"profile_{''.join(x for x in username if x.isalnum())}.json"
 
@@ -54,38 +59,28 @@ def save_settings(username, password, settings_data):
     with open(get_user_file(username), "w") as f:
         json.dump({"password_hash": hash_password(password), "settings": settings_data}, f)
 
-def load_settings(username, password):
+def load_settings(username, password_hash, is_raw_password=True):
     filename = get_user_file(username)
     if os.path.exists(filename):
         with open(filename, "r") as f:
             data = json.load(f)
-            if data.get("password_hash") == hash_password(password): return data.get("settings"), True
+            target_hash = hash_password(password_hash) if is_raw_password else password_hash
+            if data.get("password_hash") == target_hash: 
+                return data.get("settings"), True
     return None, False
-
-def manage_persistent_session(username=None, password=None, action="check"):
-    if action == "save":
-        with open(SESSION_FILE, "w") as f: json.dump({"user": username, "pwd": password, "count": 1}, f)
-    elif action == "check" and os.path.exists(SESSION_FILE):
-        with open(SESSION_FILE, "r") as f:
-            data = json.load(f)
-            if data["count"] < 10:
-                data["count"] += 1
-                with open(SESSION_FILE, "w") as fw: json.dump(data, fw)
-                return data["user"], data["pwd"], True
-            else: os.remove(SESSION_FILE)
-    elif action == "logout" and os.path.exists(SESSION_FILE): os.remove(SESSION_FILE)
-    return None, None, False
 
 # --- AUTH LOGIC ---
 if "authenticated" not in st.session_state:
-    u, p, success = manage_persistent_session(action="check")
-    if success:
-        sets, valid = load_settings(u, p)
-        if valid:
-            st.session_state.authenticated, st.session_state.current_user = True, u
-            st.session_state.user_pwd, st.session_state.saved_settings = p, sets
-        else: st.session_state.authenticated = False
-    else: st.session_state.authenticated = False
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    saved_user = cookie_manager.get("mlb_user")
+    saved_token = cookie_manager.get("mlb_token")
+    if saved_user and saved_token:
+        sets, ok = load_settings(saved_user, saved_token, is_raw_password=False)
+        if ok:
+            st.session_state.authenticated, st.session_state.current_user = True, saved_user
+            st.session_state.user_pwd_hash, st.session_state.saved_settings = saved_token, sets
 
 if not st.session_state.authenticated:
     st.markdown("<h1 style='text-align:center;'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
@@ -97,20 +92,26 @@ if not st.session_state.authenticated:
             if st.button("Access"):
                 s, ok = load_settings(uid, pwd)
                 if ok:
+                    h = hash_password(pwd)
+                    cookie_manager.set("mlb_user", uid, expires_at=datetime.now().timestamp() + 2592000)
+                    cookie_manager.set("mlb_token", h, expires_at=datetime.now().timestamp() + 2592000)
                     st.session_state.authenticated, st.session_state.current_user = True, uid
-                    st.session_state.user_pwd, st.session_state.saved_settings = pwd, s
-                    manage_persistent_session(uid, pwd, action="save"); st.rerun()
+                    st.session_state.user_pwd_hash, st.session_state.saved_settings = h, s
+                    st.rerun()
         with m[1]:
             nu, np = st.text_input("New User"), st.text_input("New Pass", type="password")
             if st.button("Create"):
                 save_settings(nu, np, {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"})
-                send_admin_notification(nu); st.success("Created!")
+                send_admin_notification(nu); st.success("Created! Now Log In.")
     st.stop()
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.title("⚾ Settings")
-    if st.button("Log Out"): manage_persistent_session(action="logout"); st.session_state.authenticated = False; st.rerun()
+    st.title(f"👋 {st.session_state.current_user}")
+    if st.button("Log Out"):
+        cookie_manager.delete("mlb_user")
+        cookie_manager.delete("mlb_token")
+        st.session_state.authenticated = False; st.rerun()
     st.divider()
     s = st.session_state.saved_settings
     preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
@@ -126,14 +127,12 @@ with st.sidebar:
     
     try: all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
     except: all_teams = []
-    fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, 
-                            index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
+    fav_team = st.selectbox("Favorite Team", ["None"] + all_teams, index=(["None"] + all_teams).index(s.get("fav_team", "None")) if s.get("fav_team") in all_teams else 0)
 
     if st.button("💾 Save Preferences"):
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
-        save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
-        st.session_state.saved_settings = new_settings
-        st.success("Preferences Saved!")
+        save_settings(st.session_state.current_user, "", new_settings) # Empty pass because we update settings, not pass
+        st.session_state.saved_settings = new_settings; st.success("Saved!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -161,7 +160,6 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
                     avgs.append(float(str(p_st.get('avg', '.000')).replace('.','0.')))
                     slgs.append(float(str(p_st.get('slg', '.400')).replace('.','0.')))
                 except: avgs.append(0.25); slgs.append(0.40)
-            
             p_name, era = "TBD", 4.10
             if sd.get('pitchers'):
                 try: 
@@ -169,14 +167,12 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
                     p_name = ps.get(f"ID{pid}", {}).get('person', {}).get('fullName', "TBD")
                     era = float(statsapi.player_stat_data(pid, group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', 4.10))
                 except: pass
-            
             wpct = get_team_info(tid, year)
             c_std = wpct * (w_std/100)
             c_era = (4.1/max(0.1,era)) * (w_era/100)
             c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
             c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
             return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg, "p_name": p_name, "era": era, "wpct": wpct, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs))}
-
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
         return {"prob_h": max(0.01, min(0.99, prob_h)), "box": box, "away": a_d, "home": h_d}
@@ -187,7 +183,6 @@ st.header("⚾ MLB Intelligence Pro")
 u_date = st.date_input("Date", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_g = {g['game_id']: g for g in sched}.values()
-
 fav = st.session_state.saved_settings.get("fav_team", "None")
 sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
@@ -199,45 +194,29 @@ for g in sorted_games:
         with c2: st.markdown(f"**{g['away_name']} @ {g['home_name']}**")
         with c3:
             if st.button("Analyze", key=f"b_{g['game_id']}"): st.session_state.active_game_id = g['game_id']
-        
         if st.session_state.get("active_game_id") == g['game_id']:
             data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_avg, w_slg, sensitivity)
             if data:
                 res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
                 conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                 st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
-                
-                with st.expander("📊 Why this team is favored (Stat Comparison)"):
+                with st.expander("📊 Strength Comparison"):
                     h, a = data['home'], data['away']
-                    total_h = max(0.01, h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg'])
-                    total_a = max(0.01, a['c_std'] + a['c_era'] + a['c_avg'] + a['c_slg'])
-                    
+                    t_h, t_a = max(0.01, h['score']), max(0.01, a['score'])
                     impact_df = pd.DataFrame([
-                        {"Category": "Team Record", g['home_name']: f"{h['wpct']:.3f} ({ (h['c_std']/total_h)*100:.1f}%)", g['away_name']: f"{a['wpct']:.3f} ({ (a['c_std']/total_a)*100:.1f}%)"},
-                        {"Category": "Pitching (ERA)", g['home_name']: f"{h['era']:.2f} ({ (h['c_era']/total_h)*100:.1f}%)", g['away_name']: f"{a['era']:.2f} ({ (a['c_era']/total_a)*100:.1f}%)"},
-                        {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f} ({ (h['c_avg']/total_h)*100:.1f}%)", g['away_name']: f"{a['avg_team']:.3f} ({ (a['c_avg']/total_a)*100:.1f}%)"},
-                        {"Category": "Lineup Power", g['home_name']: f"{h['slg_team']:.3f} ({ (h['c_slg']/total_h)*100:.1f}%)", g['away_name']: f"{a['slg_team']:.3f} ({ (a['c_slg']/total_a)*100:.1f}%)"},
+                        {"Category": "Team Record", g['home_name']: f"{h['wpct']:.3f} ({(h['c_std']/t_h)*100:.1f}%)", g['away_name']: f"{a['wpct']:.3f} ({(a['c_std']/t_a)*100:.1f}%)"},
+                        {"Category": "Pitching (ERA)", g['home_name']: f"{h['era']:.2f} ({(h['c_era']/t_h)*100:.1f}%)", g['away_name']: f"{a['era']:.2f} ({(a['c_era']/t_a)*100:.1f}%)"},
+                        {"Category": "Lineup AVG", g['home_name']: f"{h['avg_team']:.3f} ({(h['c_avg']/t_h)*100:.1f}%)", g['away_name']: f"{a['avg_team']:.3f} ({(a['c_avg']/t_a)*100:.1f}%)"},
+                        {"Category": "Lineup Power", g['home_name']: f"{h['slg_team']:.3f} ({(h['c_slg']/t_h)*100:.1f}%)", g['away_name']: f"{a['slg_team']:.3f} ({(a['c_slg']/t_a)*100:.1f}%)"},
                     ])
                     st.table(impact_df)
-
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.write("### 📊 Box Score")
                     r_a, r_h = g.get('away_score', 0), g.get('home_score', 0)
-                    # Fixed KeyError by using safer dictionary access
-                    h_a = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
-                    h_h = data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
-                    e_a = data['box'].get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
-                    e_h = data['box'].get('home', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
-                    
+                    h_a, h_h = data['box'].get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-'), data['box'].get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    e_a, e_h = data['box'].get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-'), data['box'].get('home', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
                     box_df = pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [r_a, r_h], "H": [h_a, h_h], "E": [e_a, e_h]})
-                    def highlight_winner(row):
-                        styles = [''] * len(row)
-                        if r_a > r_h and row['Team'] == g['away_name']: styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
-                        elif r_h > r_a and row['Team'] == g['home_name']: styles = ['background-color: #06402B; color: white; font-weight: bold'] * len(row)
-                        return styles
-                    st.dataframe(box_df.style.apply(highlight_winner, axis=1), hide_index=True, use_container_width=True)
-
-                st.write("### 📋 Lineups")
+                    st.dataframe(box_df, hide_index=True, use_container_width=True)
                 la, lh = st.columns(2)
                 with la:
                     st.write(f"**{g['away_name']}**")
@@ -249,4 +228,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-                        
+                    
