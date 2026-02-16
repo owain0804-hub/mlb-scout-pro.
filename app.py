@@ -98,7 +98,6 @@ with st.sidebar:
     preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
     preset = st.radio("Model Presets", preset_options, index=preset_options.index(s.get("preset", "Balanced")))
     
-    # Preset Logic
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -208,19 +207,18 @@ for g in sorted_games:
                 winner = g['home_name'] if p_h > 0.5 else g['away_name']
                 st.markdown(f'<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>', unsafe_allow_html=True)
                 
-                # --- FIXED BOX SCORE (Pulling from Schedule object) ---
+                # --- BOX SCORE (Fixed with Safe Fallbacks) ---
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.markdown("### 📊 Box Score")
-                    # Reliability fix: use g.get() as fallback for scores
                     r_a = g.get('away_score', 0)
                     r_h = g.get('home_score', 0)
                     
-                    # Try to get Hits/Errors from box, but don't let it block the Runs
                     b_data = data['box']
-                    h_a = b_data['away']['teamStats']['batting'].get('hits', '-')
-                    h_h = b_data['home']['teamStats']['batting'].get('hits', '-')
-                    e_a = b_data['away']['teamStats']['fielding'].get('errors', '-')
-                    e_h = b_data['home']['teamStats']['fielding'].get('errors', '-')
+                    # Using .get() for multi-level dictionaries to prevent KeyError
+                    h_a = b_data.get('away', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    h_h = b_data.get('home', {}).get('teamStats', {}).get('batting', {}).get('hits', '-')
+                    e_a = b_data.get('away', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
+                    e_h = b_data.get('home', {}).get('teamStats', {}).get('fielding', {}).get('errors', '-')
                     
                     box_df = pd.DataFrame({
                         "Team": [g['away_name'], g['home_name']],
@@ -243,4 +241,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             else: st.info("Loading detailed analysis...")
         st.markdown('</div>', unsafe_allow_html=True)
-        
+                    
