@@ -1,6 +1,6 @@
 import streamlit as st
 import statsapi
-import pandas as pd  # FIXED: Corrected import from 'pd' to 'pandas as pd'
+import pandas as pd
 import json
 import os
 import hashlib
@@ -25,11 +25,13 @@ def apply_pro_styles():
 
 # --- PERSISTENCE & AUTO-REPAIR ---
 USERS_FILE = "users_db.json"
+
 def load_users():
     if os.path.exists(USERS_FILE):
         try:
-            users = json.load(f)
-            # REPAIR LOGIC: Ensure all users have 5 weights and valid structure
+            with open(USERS_FILE, 'r') as f:
+                users = json.load(f)  # FIXED: Added 'f' here
+            # Repair legacy users to prevent IndexErrors
             for u in users:
                 if "weights" in users[u] and len(users[u]["weights"]) < 5:
                     users[u]["weights"] = [25, 25, 15, 20, 15]
@@ -38,9 +40,11 @@ def load_users():
     return {}
 
 def save_users(users):
-    with open(USERS_FILE, 'w') as f: json.dump(users, f)
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f)
 
-def hash_pw(password): return hashlib.sha256(password.encode()).hexdigest()
+def hash_pw(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
 # --- INITIALIZATION ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide")
@@ -49,35 +53,46 @@ st_autorefresh(interval=60000, key="mlb_timer")
 cookie_manager = stx.CookieManager()
 users_db = load_users()
 
-if "auth" not in st.session_state: st.session_state.auth = False
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+
 saved_user = cookie_manager.get(cookie="mlb_login")
 if not st.session_state.auth and saved_user and saved_user in users_db:
     st.session_state.auth, st.session_state.username = True, saved_user
 
-# --- LOGIN (FIXED KEYERROR) ---
+# --- LOGIN (FIXED LOGIN FLOW) ---
 if not st.session_state.auth:
     st.title("⚾ MLB Scout Pro")
     t1, t2 = st.tabs(["Login", "Register"])
     with t1:
-        u, p = st.text_input("Username"), st.text_input("Password", type="password")
+        u = st.text_input("Username", key="login_u")
+        p = st.text_input("Password", type="password", key="login_p")
         if st.button("Enter"):
-            # FIXED: Safer dictionary access to prevent KeyError
             if u in users_db and users_db[u].get('pw') == hash_pw(p):
-                st.session_state.auth, st.session_state.username = True, u
+                st.session_state.auth = True
+                st.session_state.username = u
                 cookie_manager.set("mlb_login", u, expires_at=datetime(2026, 12, 31))
                 st.rerun()
-            else: st.error("Incorrect Username or Password.")
+            else:
+                st.error("Invalid Username or Password.")
     with t2:
-        nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
-        if st.button("Create Account") and nu and np:
-            users_db[nu] = {"pw": hash_pw(np), "fav": "None", "weights": [25, 25, 15, 20, 15], "display_model": 1}
-            save_users(users_db); st.success("Account Created! Please Login.")
+        nu = st.text_input("New Username", key="reg_u")
+        np = st.text_input("New Password", type="password", key="reg_p")
+        if st.button("Create Account"):
+            if nu and np:
+                if nu in users_db:
+                    st.error("Username already exists!")
+                else:
+                    users_db[nu] = {"pw": hash_pw(np), "fav": "None", "weights": [25, 25, 15, 20, 15], "display_model": 1}
+                    save_users(users_db)
+                    st.success("Account created! Go to the 'Login' tab to enter.")
+            else:
+                st.error("Please provide both a username and password.")
     st.stop()
 
-# --- SIDEBAR & DATA VALIDATION (FIXED INDEXERROR) ---
+# --- SIDEBAR & WEIGHTS ---
 user_data = users_db.get(st.session_state.username, {})
 weights_list = user_data.get("weights", [25, 25, 15, 20, 15])
-# Ensure we have exactly 5 weights for the 5 sliders
 if len(weights_list) != 5:
     weights_list = [25, 25, 15, 20, 15]
 
@@ -86,21 +101,35 @@ with st.sidebar:
     cur_m = user_data.get("display_model", 1)
     sel_m = st.radio("Model Selection", [1, 2], index=0 if cur_m == 1 else 1)
     st.divider()
-    all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
+    
+    # Get Teams List
+    try:
+        all_teams = sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']])
+    except:
+        all_teams = []
+        
     fav_team_val = user_data.get("fav", "None")
     fav_idx = (["None"] + all_teams).index(fav_team_val) if fav_team_val in (["None"] + all_teams) else 0
     fav = st.selectbox("Favorite Team", ["None"] + all_teams, index=fav_idx)
     st.divider()
+    
     st.write("### 🎚️ Model 2 Weights")
     w_win = st.slider("Win %", 0, 100, weights_list[0])
     w_era = st.slider("Starter ERA", 0, 100, weights_list[1])
     w_bp = st.slider("Bullpen ERA", 0, 100, weights_list[2])
     w_avg = st.slider("Lineup AVG", 0, 100, weights_list[3])
     w_slg = st.slider("Lineup SLG", 0, 100, weights_list[4])
+    
     if st.button("Save All Settings"):
         users_db[st.session_state.username].update({"fav": fav, "weights": [w_win, w_era, w_bp, w_avg, w_slg], "display_model": sel_m})
-        save_users(users_db); st.toast("Saved!"); st.rerun()
-    if st.button("Logout"): cookie_manager.delete("mlb_login"); st.session_state.auth = False; st.rerun()
+        save_users(users_db)
+        st.toast("Settings Saved!")
+        st.rerun()
+    
+    if st.button("Logout"):
+        cookie_manager.delete("mlb_login")
+        st.session_state.auth = False
+        st.rerun()
 
 # --- DATA ENGINE ---
 @st.cache_data(ttl=3600)
@@ -141,6 +170,7 @@ def analyze_game(gid, g_info, year, weights):
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     
+    # Model 1
     imp1 = {
         "Win %": (h['wpct'] - a['wpct']) * 0.25,
         "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * 0.25,
@@ -150,6 +180,7 @@ def analyze_game(gid, g_info, year, weights):
     }
     p1 = 0.5 + sum(imp1.values()) + 0.02
     
+    # Model 2
     uw = [v/100 for v in weights]
     imp2 = {
         "Win %": (h['wpct'] - a['wpct']) * uw[0],
@@ -197,4 +228,4 @@ for g in sorted_sched:
         with c2:
             st.markdown(f'<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" width="20"> {data["home"]["p"]} ({data["home"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-    
+                                           
