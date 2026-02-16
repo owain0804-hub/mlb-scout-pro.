@@ -313,4 +313,3 @@ else:
                         st.write(f"**{g['home_name']} Starter:** {data['home']['p_name']}")
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             st.markdown('</div>', unsafe_allow_html=True)
-            
