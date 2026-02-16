@@ -19,6 +19,51 @@ SENDER_EMAIL = st.secrets.get("SENDER_EMAIL", "owainbaseball@gmail.com")
 SENDER_PASSWORD = st.secrets.get("SENDER_PASSWORD", "lixs qgpo ihyd ikiq") 
 ADMIN_EMAIL = st.secrets.get("ADMIN_EMAIL", "owainbaseball@gmail.com")
 
+# --- CUSTOM "PRO" STYLING ---
+def apply_pro_styles():
+    st.markdown("""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        
+        html, body, [class*="st-"] { font-family: 'Inter', sans-serif; }
+        
+        /* Card Styling */
+        .matchup-card {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            transition: transform 0.2s;
+        }
+        .matchup-card:hover { border-color: #58a6ff; transform: translateY(-2px); }
+        
+        /* Prediction Banner */
+        .prediction-banner {
+            background: linear-gradient(90deg, #1e3a8a 0%, #1e40af 100%);
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 15px;
+            border: 1px solid #3b82f6;
+        }
+        
+        /* Stat Pill */
+        .stat-pill {
+            background: #161b22;
+            padding: 4px 12px;
+            border-radius: 20px;
+            border: 1px solid #30363d;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+        
+        /* Metric Edge Colors */
+        .edge-green { color: #3fb950; font-weight: bold; }
+        .edge-red { color: #f85149; font-weight: bold; }
+        </style>
+    """, unsafe_allow_html=True)
+
 # --- SECURITY HELPERS ---
 def get_hash(password, salt):
     return hashlib.pbkdf2_hmac('sha256', password.encode(), salt, 100000).hex()
@@ -42,13 +87,14 @@ def load_user_data(username):
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="MLB AI Scout Pro", layout="wide", page_icon="⚾")
+apply_pro_styles()
 st_autorefresh(interval=30000, key="mlb_live_timer")
 cookie_manager = stx.CookieManager()
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-# Session Check (Simplified for speed)
+# Session Check (Shortened for brevity - keeps existing auth logic)
 auth_cookie = cookie_manager.get(cookie="mlb_session_token")
 if not st.session_state.authenticated and auth_cookie and ":" in auth_cookie:
     u_name, u_token = auth_cookie.split(":", 1)
@@ -59,14 +105,14 @@ if not st.session_state.authenticated and auth_cookie and ":" in auth_cookie:
         st.session_state.saved_settings = u_data.get("settings")
 
 if not st.session_state.authenticated:
-    st.markdown("<h1 style='text-align:center;'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;'>⚾ MLB Scout Pro</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         tab1, tab2 = st.tabs(["Login", "Register"])
         with tab1:
             u_in = st.text_input("Username")
             p_in = st.text_input("Password", type="password")
-            if st.button("Access System"):
+            if st.button("Access Dashboard"):
                 u_data = load_user_data(u_in)
                 if u_data and 'salt' in u_data:
                     salt = bytes.fromhex(u_data['salt'])
@@ -102,12 +148,10 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
-
-    s = st.session_state.saved_settings
-    w_std, w_era, w_rpg, w_avg, w_slg = 25, 25, 20, 5, 25 # Default Pro Weights
+    w_std, w_era, w_rpg, w_avg, w_slg = 25, 25, 20, 5, 25 
     sensitivity = 1.3
 
-# --- CORE LOGIC ---
+# --- CORE LOGIC (Dynamic Stat Fetching) ---
 @st.cache_data(ttl=3600)
 def get_team_rpg(tid, year):
     try:
@@ -157,7 +201,6 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_rpg, w_avg, w_slg, sens
             
             wpct, rpg = get_team_wpct(tid, year), get_team_rpg(tid, year)
             c_score = (wpct * w_std) + ((4.25/max(0.1,era)) * w_era) + ((rpg/4.4) * w_rpg) + ((sum(avgs)/max(1,len(avgs))*4) * w_avg) + ((sum(slgs)/max(1,len(slgs))*2.5) * w_slg)
-            
             return {"score": c_score, "lineup": lineup, "p_name": p_name, "era": era, "wpct": wpct, "rpg": rpg, "avg_team": sum(avgs)/max(1,len(avgs)), "slg_team": sum(slgs)/max(1,len(slgs))}
         
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
@@ -166,64 +209,67 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_rpg, w_avg, w_slg, sens
     except: return None
 
 # --- UI MAIN ---
-st.header("⚾ MLB Intelligence Pro")
-u_date = st.date_input("Select Date", datetime.now())
+st.markdown("<h2 style='text-align:center;'>MLB ANALYTICS CONSOLE</h2>", unsafe_allow_html=True)
+u_date = st.date_input("Select Gameday", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 
 if not sched:
-    st.info("📅 No games today.")
+    st.info("📅 All quiet in the ballpark. Check another date.")
 else:
     for g in {g['game_id']: g for g in sched}.values():
         with st.container():
-            st.markdown('<div style="border-radius:15px; padding:20px; background:#161b22; border:1px solid #30363d; margin-bottom:20px;">', unsafe_allow_html=True)
-            c1, c2, c3 = st.columns([1, 4, 1.5])
-            with c1: st.image(f"https://www.mlbstatic.com/team-logos/{g['away_id']}.svg", width=55)
-            with c2: st.markdown(f"### {g['away_name']} @ {g['home_name']}")
-            with c3:
-                if st.button("Analyze Matchup", key=f"b_{g['game_id']}"): st.session_state.active_game_id = g['game_id']
+            st.markdown(f"""
+                <div class="matchup-card">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <div style="display: flex; align-items: center;">
+                            <img src="https://www.mlbstatic.com/team-logos/{g['away_id']}.svg" width="60" style="margin-right: 20px;">
+                            <div>
+                                <h2 style="margin: 0;">{g['away_name']} <span style="color: #8b949e; font-size: 0.7em;">@</span> {g['home_name']}</h2>
+                                <span class="stat-pill">{g.get('status', 'Scheduled')}</span>
+                            </div>
+                        </div>
+                        <img src="https://www.mlbstatic.com/team-logos/{g['home_id']}.svg" width="60">
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
             
+            if st.button("LAUNCH DATA ANALYSIS", key=f"b_{g['game_id']}"): 
+                st.session_state.active_game_id = g['game_id']
+
             if st.session_state.get("active_game_id") == g['game_id']:
                 data = get_detailed_data(g['game_id'], g, u_date.year, w_std, w_era, w_rpg, w_avg, w_slg, sensitivity)
                 if data:
                     res = g['home_name'] if data['prob_h'] > 0.5 else g['away_name']
                     conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h']) * 100
-                    st.info(f"🏅 **AI Projection: {res} ({conf:.1f}%)**")
+                    
+                    st.markdown(f"""
+                        <div class="prediction-banner">
+                            <h3 style="margin:0; font-size: 0.9em; opacity: 0.8;">WINNER PROBABILITY</h3>
+                            <h1 style="margin:0; color: #fff;">{res} {conf:.1f}%</h1>
+                        </div>
+                    """, unsafe_allow_html=True)
 
-                    # --- SCOUTING DATA WITH "FAVORS" INDICATOR ---
-                    st.write("### 📊 Scouting Intelligence")
+                    # --- PRO METRIC GRID ---
                     h, a = data['home'], data['away']
-                    
-                    def get_edge(h_val, a_val, lower_is_better=False):
-                        if lower_is_better:
-                            return g['home_name'] if h_val < a_val else g['away_name']
-                        return g['home_name'] if h_val > a_val else g['away_name']
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Win Rate", f"{h['wpct']:.3f}", f"{h['wpct']-a['wpct']:.3f} Edge")
+                    m2.metric("Starter ERA", f"{h['era']:.2f}", f"{a['era']-h['era']:.2f} Edge", delta_color="inverse")
+                    m3.metric("Runs/G", f"{h['rpg']:.2f}", f"{h['rpg']-a['rpg']:.2f} Edge")
+                    m4.metric("Lineup SLG", f"{h['slg_team']:.3f}", f"{h['slg_team']-a['slg_team']:.3f} Edge")
 
-                    scout_df = pd.DataFrame([
-                        {"Stat": "Win %", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}", "Favors": get_edge(h['wpct'], a['wpct'])},
-                        {"Stat": "Starter ERA", g['home_name']: f"{h['era']:.2f}", g['away_name']: f"{a['era']:.2f}", "Favors": get_edge(h['era'], a['era'], True)},
-                        {"Stat": "Runs / Game", g['home_name']: f"{h['rpg']:.2f}", g['away_name']: f"{a['rpg']:.2f}", "Favors": get_edge(h['rpg'], a['rpg'])},
-                        {"Stat": "Lineup SLG", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}", "Favors": get_edge(h['slg_team'], a['slg_team'])},
-                    ])
-                    st.table(scout_df)
-
-                    # --- LIVE BOX SCORE ---
-                    st.write("### 🏟️ Live Box Score")
-                    box_data = data['box']
-                    away_bat = box_data.get('away', {}).get('teamStats', {}).get('batting', {})
-                    home_bat = box_data.get('home', {}).get('teamStats', {}).get('batting', {})
-                    st.table(pd.DataFrame({
-                        "Team": [g['away_name'], g['home_name']],
-                        "Runs": [g.get('away_score', 0), g.get('home_score', 0)],
-                        "Hits": [away_bat.get('hits', 0), home_bat.get('hits', 0)],
-                        "Errors": [away_bat.get('errors', 0), home_bat.get('errors', 0)]
-                    }))
+                    # --- BOX SCORE & LINEUPS ---
+                    tab_scout, tab_lineup = st.tabs(["📊 Game Intelligence", "📋 Rosters & Box"])
                     
-                    # --- LINEUPS ---
-                    l_col, r_col = st.columns(2)
-                    with l_col:
-                        st.write(f"**{g['away_name']} Lineup** (Starter: {data['away']['p_name']})")
-                        st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
-                    with r_col:
-                        st.write(f"**{g['home_name']} Lineup** (Starter: {data['home']['p_name']})")
-                        st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+                    with tab_scout:
+                        st.markdown("### Power Index Comparison")
+                        st.progress(data['prob_h'], text=f"{g['home_name']} Advantage Index")
+                    
+                    with tab_lineup:
+                        c_a, c_h = st.columns(2)
+                        with c_a:
+                            st.write(f"**{g['away_name']} Lineup**")
+                            st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
+                        with c_h:
+                            st.write(f"**{g['home_name']} Lineup**")
+                            st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
+    
