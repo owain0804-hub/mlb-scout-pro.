@@ -115,10 +115,36 @@ if not st.session_state.authenticated:
 # --- SIDEBAR ---
 with st.sidebar:
     st.title(f"👋 {st.session_state.current_user}")
+    
+    # HOW IT WORKS BUTTON
+    if st.button("📖 How It Works"):
+        @st.dialog("About MLB Intelligence Pro")
+        def show_help():
+            st.write("""
+            ### 🧠 AI Projection Engine
+            This tool uses real-time MLB data to calculate winning probabilities.
+            
+            **1. Data Sources:** We pull live stats from the Official MLB API, including seasonal Win/Loss records, Starter ERA, and active Lineup stats (AVG/SLG).
+            
+            **2. The Formula:**
+            The AI calculates a "Strength Score" for both teams based on your custom weights:
+            * **Standings:** Team's overall season performance.
+            * **Pitching:** Effectiveness of the starting pitcher.
+            * **Lineup:** The combined power and hitting ability of today's starting 9.
+            
+            **3. Probabilities:**
+            The scores are compared using a sensitivity algorithm to determine the % chance of victory.
+            
+            **4. Auto-Refresh:**
+            The dashboard updates every 30 seconds to capture live score changes and pitching substitutions.
+            """)
+        show_help()
+
     if st.button("Log Out"):
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
+    
     s = st.session_state.get("saved_settings", {})
     preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
     current_preset = s.get("preset", "Balanced")
@@ -227,7 +253,7 @@ else:
                     conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                     st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                     
-                    # AI WEIGHT COMPARISON (MOVED TO TOP)
+                    # AI WEIGHT COMPARISON
                     st.write("### 📊 AI Weight Comparison")
                     h, a = data['home'], data['away']
                     impact_df = pd.DataFrame([
@@ -265,4 +291,4 @@ else:
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
                 else: st.info("Loading analysis...")
             st.markdown('</div>', unsafe_allow_html=True)
-                
+        
