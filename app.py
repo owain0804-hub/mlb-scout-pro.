@@ -42,6 +42,7 @@ st.markdown("""
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
     .live-badge { background: #ff4b4b; color: white; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+    .pitcher-stat { background: #1c2128; padding: 10px; border-radius: 8px; border-left: 4px solid #58a6ff; margin-bottom: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -226,7 +227,7 @@ else:
                     conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                     st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                     
-                    # LIVE BOXSCORE LOGIC
+                    # LIVE BOXSCORE
                     st.write("### 🏟️ Live Boxscore")
                     box_data = data['box']
                     away_stats = box_data.get('away', {}).get('teamStats', {}).get('batting', {})
@@ -239,8 +240,20 @@ else:
                         "Errors": [away_stats.get('errors', 0), home_stats.get('errors', 0)]
                     })
                     st.table(live_df)
+                    
+                    # LINEUPS & STARTING PITCHERS
+                    st.write("### 📋 Lineups & Starters")
+                    la, lh = st.columns(2)
+                    with la:
+                        st.markdown(f"""<div class='pitcher-stat'><b>🔥 {g['away_name']} Starter</b><br>
+                                    {data['away']['p_name']} (ERA: {data['away']['era']})</div>""", unsafe_allow_html=True)
+                        st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
+                    with lh:
+                        st.markdown(f"""<div class='pitcher-stat'><b>🔥 {g['home_name']} Starter</b><br>
+                                    {data['home']['p_name']} (ERA: {data['home']['era']})</div>""", unsafe_allow_html=True)
+                        st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
 
-                    with st.expander("📊 Comparison Breakdown"):
+                    with st.expander("📊 AI Weight Comparison"):
                         h, a = data['home'], data['away']
                         impact_df = pd.DataFrame([
                             {"Category": "Record (Win %)", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
@@ -249,13 +262,6 @@ else:
                             {"Category": "Lineup Power (SLG)", g['home_name']: f"{h['slg_team']:.3f}", g['away_name']: f"{a['slg_team']:.3f}"},
                         ])
                         st.table(impact_df)
-                    
-                    la, lh = st.columns(2)
-                    with la:
-                        st.write(f"**{g['away_name']} Lineup**")
-                        st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
-                    with lh:
-                        st.write(f"**{g['home_name']} Lineup**")
-                        st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
                 else: st.info("Loading analysis...")
             st.markdown('</div>', unsafe_allow_html=True)
+                    
