@@ -121,17 +121,13 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-    # --- UPDATED PRESETS FROM SCREENSHOT ---
     s = st.session_state.saved_settings
     preset_list = ["Balanced (Recommended)", "Pitching Heavy", "Offense Heavy", "Custom"]
-    
-    # Map old "Balanced" name to new name if needed
     current_p = s.get('preset', 'Balanced (Recommended)')
     if current_p == "Balanced": current_p = "Balanced (Recommended)"
     
     preset_choice = st.radio("Model Presets", preset_list, index=preset_list.index(current_p) if current_p in preset_list else 0)
     
-    # Screenshot values: 35, 20, 20, 25
     if preset_choice == "Balanced (Recommended)": w_std, w_era, w_avg, w_slg = 35, 20, 20, 25
     elif preset_choice == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset_choice == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -173,16 +169,42 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
         box = statsapi.boxscore_data(gid)
         def fetch_side(side, tid):
             sd = box.get(side, {})
-            ps, bt = sd.get('players', {}), sd.get('batters', [])
+            ps = sd.get('players', {})
+            
+            # --- FIX: GET FULL 9-MAN LINEUP ---
+            # We look for players with a battingOrder (100, 200, etc.)
+            starters = []
+            for p_id, p_data in ps.items():
+                b_order = p_data.get('battingOrder')
+                # Starting positions end in "00" (100, 200, ... 900)
+                if b_order and b_order.endswith('00'):
+                    starters.append({
+                        'id': p_data['person']['id'],
+                        'name': p_data['person']['fullName'],
+                        'order': int(b_order)
+                    })
+            
+            # Sort by batting order 1-9
+            starters = sorted(starters, key=lambda x: x['order'])
+            
             lineup, avgs, slgs = [], [], []
-            for pid in bt[:9]:
-                p_inf = ps.get(f"ID{pid}", {}).get('person', {})
+            # Process the sorted starters
+            for player in starters:
+                pid = player['id']
                 try:
                     p_st = statsapi.player_stat_data(pid, group="hitting", type="season", season=year)['stats'][0]['stats']
-                    lineup.append({"Player": p_inf.get('fullName', "TBD"), "AVG": p_st.get('avg', '.000')})
+                    lineup.append({"Order": f"{player['order']//100}", "Player": player['name'], "AVG": p_st.get('avg', '.000')})
                     avgs.append(float(str(p_st.get('avg', '.000')).replace('.','0.')))
                     slgs.append(float(str(p_st.get('slg', '.400')).replace('.','0.')))
-                except: avgs.append(0.25); slgs.append(0.40)
+                except: 
+                    lineup.append({"Order": f"{player['order']//100}", "Player": player['name'], "AVG": ".000"})
+                    avgs.append(0.25); slgs.append(0.40)
+            
+            # If still empty (game hasn't locked lineups), fallback to 'batters' list or show empty
+            if not lineup:
+                for pid in sd.get('batters', [])[:9]:
+                    p_name = ps.get(f"ID{pid}", {}).get('person', {}).get('fullName', "TBD")
+                    lineup.append({"Order": "-", "Player": p_name, "AVG": ".000"})
             
             p_name, era, is_tbd = "TBD", 4.10, True
             if sd.get('pitchers'):
@@ -248,17 +270,14 @@ else:
                         </div>
                     """, unsafe_allow_html=True)
 
-                    # --- UPDATED IMPACT DRIVERS (CLEANED) ---
                     with st.expander("🔍 Prediction Breakdown: Why this pick?"):
                         h, a = data['home'], data['away']
-                        
                         drivers = [
                             ("Team Record / Standings", h['c_std'], a['c_std']),
                             ("Pitching Matchup (ERA)", h['c_era'], a['c_era']),
                             ("Lineup Consistency (AVG)", h['c_avg'], a['c_avg']),
                             ("Lineup Power (SLG)", h['c_slg'], a['c_slg'])
                         ]
-                        
                         max_diff = -1
                         main_reason = ""
                         for label, hv, av in drivers:
@@ -266,13 +285,10 @@ else:
                             if diff > max_diff:
                                 max_diff = diff
                                 main_reason = label
-
                         st.write(f"**The biggest factor today is: {main_reason}**")
-
                         for label, hv, av in drivers:
                             total = hv + av if (hv + av) > 0 else 1
                             h_perc = (hv / total)
-                            
                             col_l, col_r = st.columns([1, 1])
                             with col_l: st.write(f"**{label}**")
                             with col_r:
@@ -283,7 +299,6 @@ else:
                     if data['home']['is_tbd'] or data['away']['is_tbd']:
                         st.warning("⚠️ Prediction uses league averages because starters are not confirmed.")
 
-                    # --- DATA TABLES ---
                     st.write("### 📊 Scouting Data")
                     impact_df = pd.DataFrame([
                         {"Category": "Win %", g['home_name']: f"{h['wpct']:.3f}", g['away_name']: f"{a['wpct']:.3f}"},
@@ -313,3 +328,4 @@ else:
                         st.write(f"**{g['home_name']} Starter:** {data['home']['p_name']}")
                         st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
             st.markdown('</div>', unsafe_allow_html=True)
+                    
