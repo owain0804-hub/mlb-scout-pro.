@@ -33,6 +33,7 @@ def send_admin_notification(new_user):
     except: pass
 
 # --- COOKIE MANAGER ---
+# We initialize this at the top to give it maximum time to load
 cookie_manager = stx.CookieManager()
 
 # --- PAGE CONFIG & THEME ---
@@ -70,16 +71,23 @@ def load_settings(username, password_hash, is_raw_password=True):
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-# Cookie Auto-Login
+# FIXED: Added a small safety delay and check for cookie readiness
 if not st.session_state.authenticated:
-    cookies = cookie_manager.get_all()
-    saved_user = cookies.get("mlb_user")
-    saved_token = cookies.get("mlb_token")
-    if saved_user and saved_token:
-        sets, ok = load_settings(saved_user, saved_token, is_raw_password=False)
-        if ok:
-            st.session_state.authenticated, st.session_state.current_user = True, saved_user
-            st.session_state.user_pwd_hash, st.session_state.saved_settings = saved_token, sets
+    try:
+        # We fetch all cookies once to avoid multiple component calls
+        all_cookies = cookie_manager.get_all()
+        if all_cookies:
+            saved_user = all_cookies.get("mlb_user")
+            saved_token = all_cookies.get("mlb_token")
+            if saved_user and saved_token:
+                sets, ok = load_settings(saved_user, saved_token, is_raw_password=False)
+                if ok:
+                    st.session_state.authenticated = True
+                    st.session_state.current_user = saved_user
+                    st.session_state.user_pwd_hash = saved_token
+                    st.session_state.saved_settings = sets
+    except:
+        pass # If cookies aren't ready, we just show the login screen quietly
 
 if not st.session_state.authenticated:
     st.markdown("<h1 style='text-align:center;'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
@@ -95,17 +103,20 @@ if not st.session_state.authenticated:
                     if ok:
                         h = hash_password(pwd)
                         expiry = datetime.now() + timedelta(days=30)
+                        # Setting cookies
                         cookie_manager.set("mlb_user", uid, expires_at=expiry)
                         cookie_manager.set("mlb_token", h, expires_at=expiry)
+                        
+                        # Set session state immediately
                         st.session_state.authenticated = True
                         st.session_state.current_user = uid
                         st.session_state.user_pwd_hash = h
                         st.session_state.saved_settings = s
-                        st.success("Logging in...")
-                        time.sleep(0.5) # Allow cookie to set
+                        
+                        st.success("Synchronizing session...")
+                        time.sleep(0.8) # Wait slightly longer for browser storage
                         st.rerun()
                     else: st.error("Invalid Credentials")
-                else: st.warning("Please enter username and password")
         with m[1]:
             nu = st.text_input("New User", key="reg_user")
             np = st.text_input("New Pass", type="password", key="reg_pass")
@@ -113,8 +124,8 @@ if not st.session_state.authenticated:
                 if nu and np:
                     save_settings(nu, np, {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"})
                     send_admin_notification(nu)
-                    st.success("Created! Switch to Login tab.")
-                else: st.warning("Please enter a username and password")
+                    st.success("Account Created! Use the Login tab.")
+                else: st.warning("Username/Password required")
     st.stop()
 
 # --- SIDEBAR ---
@@ -252,4 +263,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-            
+        
