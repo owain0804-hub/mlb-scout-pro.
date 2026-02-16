@@ -48,7 +48,7 @@ st.markdown("""
 def hash_password(password): return hashlib.sha256(str.encode(password)).hexdigest()
 def get_user_file(username): return f"profile_{''.join(x for x in username if x.isalnum())}.json"
 
-def save_settings(username, password, settings_data):
+def save_settings(username, password, settings_data, login_count=0):
     filename = get_user_file(username)
     existing_hash = ""
     if os.path.exists(filename):
@@ -59,7 +59,11 @@ def save_settings(username, password, settings_data):
     
     new_hash = hash_password(password) if password else existing_hash
     with open(filename, "w") as f:
-        json.dump({"password_hash": new_hash, "settings": settings_data}, f)
+        json.dump({
+            "password_hash": new_hash, 
+            "settings": settings_data,
+            "login_count": login_count # Track login frequency
+        }, f)
 
 def load_settings(username, password):
     filename = get_user_file(username)
@@ -67,10 +71,17 @@ def load_settings(username, password):
         try:
             with open(filename, "r") as f:
                 data = json.load(f)
-                if data.get("password_hash") == hash_password(password): 
-                    return data.get("settings"), True
+                if data.get("password_hash") == hash_password(password):
+                    # Increment counter on successful login
+                    current_count = data.get("login_count", 0) + 1
+                    new_count = 0 if current_count >= 10 else current_count
+                    
+                    # Update the file with the new count
+                    save_settings(username, None, data.get("settings"), login_count=new_count)
+                    
+                    return data.get("settings"), True, new_count
         except: pass
-    return None, False
+    return None, False, 0
 
 # --- AUTH LOGIC ---
 if "authenticated" not in st.session_state:
@@ -86,11 +97,13 @@ if not st.session_state.authenticated:
             pwd = st.text_input("Password", type="password", key="login_pass")
             if st.button("Access System"):
                 if uid and pwd:
-                    s, ok = load_settings(uid, pwd)
+                    s, ok, count = load_settings(uid, pwd)
                     if ok:
                         st.session_state.authenticated = True
                         st.session_state.current_user = uid
                         st.session_state.saved_settings = s
+                        st.success(f"Login {count}/10 - System Access Granted")
+                        time.sleep(1)
                         st.rerun()
                     else: st.error("Invalid Username or Password")
         with m[1]:
@@ -114,7 +127,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
-    # Safely get settings
     s = st.session_state.get("saved_settings", {})
     preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
     current_preset = s.get("preset", "Balanced")
@@ -199,7 +211,6 @@ u_date = st.date_input("Select Date", datetime.now())
 sched = statsapi.schedule(date=u_date.strftime("%m/%d/%Y"))
 unique_g = {g['game_id']: g for g in sched}.values()
 
-# Safely get fav_team for sorting
 fav = st.session_state.get("saved_settings", {}).get("fav_team", "None")
 sorted_games = sorted(unique_g, key=lambda x: (x.get('away_name') != fav and x.get('home_name') != fav))
 
@@ -238,4 +249,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Loading analysis...")
         st.markdown('</div>', unsafe_allow_html=True)
-                                      
+            
