@@ -41,8 +41,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
-    .login-header { text-align: center; padding-top: 50px; padding-bottom: 20px; }
-    .details-text { font-size: 0.9em; color: #8b949e; margin-top: 15px; }
+    .stat-header { color: #8b949e; font-size: 0.85em; text-transform: uppercase; letter-spacing: 1px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -89,7 +88,7 @@ if "authenticated" not in st.session_state:
     else: st.session_state.authenticated = False
 
 if not st.session_state.authenticated:
-    st.markdown("<h1 class='login-header'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         m = st.tabs(["Login", "Register"])
@@ -108,13 +107,13 @@ if not st.session_state.authenticated:
                 send_admin_notification(nu); st.success("Created!")
     st.stop()
 
-# --- SIDEBAR & CORE FUNCTIONS ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.title("⚾ Settings")
+    st.title("⚾ Model Weights")
     if st.button("Log Out"): manage_persistent_session(action="logout"); st.session_state.authenticated = False; st.rerun()
     st.divider()
     s = st.session_state.saved_settings
-    preset = st.radio("Model Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
+    preset = st.radio("Presets", ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"], index=["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"].index(s.get("preset", "Balanced")))
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -123,18 +122,18 @@ with st.sidebar:
         w_era = st.slider("Pitching %", 0, 100, s["w_era"])
         w_avg = st.slider("Lineup AVG %", 0, 100, s["w_avg"])
         w_slg = st.slider("Lineup SLG %", 0, 100, s["w_slg"])
-    sensitivity = st.slider("Stat Sensitivity", 1.0, 3.0, 1.2)
-    fav_team = st.selectbox("Favorite Team", ["None"] + sorted([t['name'] for t in statsapi.get('teams', {'sportId': 1})['teams']]))
+    sensitivity = st.slider("Sensitivity", 1.0, 3.0, 1.2)
 
+# --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
 def get_team_info(tid, year):
     try:
         standings = statsapi.standings_data(leagueId="103,104", season=year)
         for div in standings.values():
             for t in div.get('teams', []):
-                if t['team_id'] == tid: return f"{t['w']}-{t['l']}", (int(t['w'])/max(1, int(t['w'])+int(t['l'])))
+                if t['team_id'] == tid: return (int(t['w'])/max(1, int(t['w'])+int(t['l'])))
     except: pass
-    return "0-0", 0.50
+    return 0.50
 
 def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity):
     try:
@@ -152,15 +151,20 @@ def get_detailed_data(gid, g_info, year, w_std, w_era, w_avg, w_slg, sensitivity
                     slgs.append(float(str(p_st.get('slg', '.400')).replace('.','0.')))
                 except: avgs.append(0.25); slgs.append(0.40)
             
-            p_list = sd.get('pitchers', [])
-            p_name, era = "TBD", 4.10
-            if p_list:
-                p_name = ps.get(f"ID{p_list[0]}", {}).get('person', {}).get('fullName', "TBD")
-                try: era = float(statsapi.player_stat_data(p_list[0], group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', 4.10))
+            era = 4.10
+            if sd.get('pitchers'):
+                try: era = float(statsapi.player_stat_data(sd['pitchers'][0], group="pitching", type="season", season=year)['stats'][0]['stats'].get('era', 4.10))
                 except: pass
-            rec, wpct = get_team_info(tid, year)
-            score = (wpct*(w_std/100)) + ((4.1/max(0.1,era))*(w_era/100)) + ((sum(avgs)/max(1,len(avgs))*4)*(w_avg/100)) + ((sum(slgs)/max(1,len(slgs))*2.5)*(w_slg/100))
-            return {"score": score, "lineup": lineup, "p_name": p_name, "era": era, "wpct": wpct, "avg": sum(avgs)/max(1,len(avgs)), "slg": sum(slgs)/max(1,len(slgs))}
+            
+            wpct = get_team_info(tid, year)
+            
+            # Category Contributions
+            c_std = wpct * (w_std/100)
+            c_era = (4.1/max(0.1,era)) * (w_era/100)
+            c_avg = (sum(avgs)/max(1,len(avgs))*4) * (w_avg/100)
+            c_slg = (sum(slgs)/max(1,len(slgs))*2.5) * (w_slg/100)
+            
+            return {"score": c_std+c_era+c_avg+c_slg, "lineup": lineup, "c_std": c_std, "c_era": c_era, "c_avg": c_avg, "c_slg": c_slg}
 
         a_d, h_d = fetch_side('away', g_info['away_id']), fetch_side('home', g_info['home_id'])
         prob_h = 0.5 + ((h_d['score'] - a_d['score']) * sensitivity / max(0.1, (h_d['score'] + a_d['score'])/2)) + 0.03 
@@ -189,33 +193,30 @@ for g in unique_g:
                 conf = (data['prob_h'] if data['prob_h'] > 0.5 else 1-data['prob_h'])*100
                 st.markdown(f'<div class="winner-box">🏅 Projection: <b>{res}</b> ({conf:.1f}%)</div>', unsafe_allow_html=True)
                 
-                with st.expander("📊 Visual Matchup Breakdown"):
-                    # Create comparison data
+                with st.expander("📊 Percentage Contribution by Stat"):
                     h, a = data['home'], data['away']
-                    # Normalize Pitching (lower ERA is better, so we use 10 - ERA for the bar length)
-                    chart_data = pd.DataFrame([
-                        {"Metric": "Standings (Win %)", "Team": g['home_name'], "Value": h['wpct']},
-                        {"Metric": "Standings (Win %)", "Team": g['away_name'], "Value": a['wpct']},
-                        {"Metric": "Pitching (Inverted ERA)", "Team": g['home_name'], "Value": max(0, 10 - h['era'])/10},
-                        {"Metric": "Pitching (Inverted ERA)", "Team": g['away_name'], "Value": max(0, 10 - a['era'])/10},
-                        {"Metric": "Lineup (AVG)", "Team": g['home_name'], "Value": h['avg'] * 3}, # Scaled for visibility
-                        {"Metric": "Lineup (AVG)", "Team": g['away_name'], "Value": a['avg'] * 3},
-                        {"Metric": "Power (SLG)", "Team": g['home_name'], "Value": h['slg'] * 2},
-                        {"Metric": "Power (SLG)", "Team": g['away_name'], "Value": a['slg'] * 2},
-                    ])
+                    # Calculate relative percentage contribution for the UI
+                    total_h = h['c_std'] + h['c_era'] + h['c_avg'] + h['c_slg']
+                    total_a = a['c_std'] + a['c_era'] + a['c_avg'] + a['c_slg']
                     
-                    chart = alt.Chart(chart_data).mark_bar().encode(
-                        x=alt.X('Value:Q', axis=None),
-                        y=alt.Y('Team:N', axis=alt.Axis(title=None)),
-                        color=alt.Color('Team:N', scale=alt.Scale(range=['#002D72', '#CE1141']), legend=None),
-                        row=alt.Row('Metric:N', header=alt.Header(labelColor='white', labelFontSize=12))
-                    ).properties(width=600, height=50)
-                    st.altair_chart(chart)
-                    st.markdown(f"<div class='details-text'>Detailed Edge: {'Home Field' if data['prob_h'] > 0.5 else 'Road Strategy'} factored at +3.0%.</div>", unsafe_allow_html=True)
+                    impact_df = pd.DataFrame([
+                        {"Stat": "Standings", g['home_name']: f"{(h['c_std']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_std']/total_a)*100:.1f}%"},
+                        {"Stat": "Pitching", g['home_name']: f"{(h['c_era']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_era']/total_a)*100:.1f}%"},
+                        {"Stat": "Batting AVG", g['home_name']: f"{(h['c_avg']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_avg']/total_a)*100:.1f}%"},
+                        {"Stat": "Slugging", g['home_name']: f"{(h['c_slg']/total_h)*100:.1f}%", g['away_name']: f"{(a['c_slg']/total_a)*100:.1f}%"},
+                    ])
+                    st.table(impact_df)
+                    st.caption("Each percentage represents how much that specific stat category contributed to that team's total model score.")
 
-                if g.get('status') in ["Final", "Live", "In Progress"]:
-                    st.write("### Box Score")
-                    st.dataframe(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score',0), g.get('home_score',0)]}), hide_index=True)
+                # Keep Lineups
+                st.write("### 📋 Lineups")
+                la, lh = st.columns(2)
+                with la:
+                    st.write(f"**{g['away_name']}**")
+                    st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True, use_container_width=True)
+                with lh:
+                    st.write(f"**{g['home_name']}**")
+                    st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
         
