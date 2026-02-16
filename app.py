@@ -17,13 +17,14 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
-    /* Professional Login Styling */
     .login-header { text-align: center; padding-top: 50px; padding-bottom: 20px; }
     .login-subtitle { text-align: center; color: #8b949e; margin-bottom: 30px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- SECURE STORAGE LOGIC ---
+# --- SECURE STORAGE & SESSION PERSISTENCE ---
+SESSION_FILE = "active_session.json"
+
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
@@ -44,19 +45,46 @@ def load_settings(username, password):
             data = json.load(f)
             if data.get("password_hash") == hash_password(password):
                 return data.get("settings"), True
-            else:
-                return None, False
-    return None, None
+    return None, False
+
+def manage_persistent_session(username=None, password=None, action="check"):
+    if action == "save":
+        with open(SESSION_FILE, "w") as f:
+            json.dump({"user": username, "pwd": password, "count": 1}, f)
+    elif action == "check":
+        if os.path.exists(SESSION_FILE):
+            with open(SESSION_FILE, "r") as f:
+                data = json.load(f)
+                if data["count"] < 10:
+                    data["count"] += 1
+                    with open(SESSION_FILE, "w") as fw:
+                        json.dump(data, fw)
+                    return data["user"], data["pwd"], True
+                else:
+                    os.remove(SESSION_FILE) # Force relogin after 10
+        return None, None, False
+    elif action == "logout":
+        if os.path.exists(SESSION_FILE):
+            os.remove(SESSION_FILE)
 
 # --- INITIALIZE SESSION STATE ---
+if "authenticated" not in st.session_state:
+    # Auto-login check on first load
+    u, p, success = manage_persistent_session(action="check")
+    if success:
+        sets, valid = load_settings(u, p)
+        if valid:
+            st.session_state.authenticated = True
+            st.session_state.current_user = u
+            st.session_state.user_pwd = p
+            st.session_state.saved_settings = sets
+        else:
+            st.session_state.authenticated = False
+    else:
+        st.session_state.authenticated = False
+
 if "active_game_id" not in st.session_state:
     st.session_state.active_game_id = None
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "current_user" not in st.session_state:
-    st.session_state.current_user = None
-if "user_pwd" not in st.session_state:
-    st.session_state.user_pwd = None
 
 # --- AUTHENTICATION SCREEN ---
 if not st.session_state.authenticated:
@@ -66,7 +94,6 @@ if not st.session_state.authenticated:
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         mode = st.tabs(["Secure Login", "Register Account"])
-        
         with mode[0]:
             user_id = st.text_input("Username", key="login_user")
             input_pwd = st.text_input("Password", type="password", key="login_pwd")
@@ -77,12 +104,10 @@ if not st.session_state.authenticated:
                     st.session_state.current_user = user_id
                     st.session_state.user_pwd = input_pwd
                     st.session_state.saved_settings = settings
+                    manage_persistent_session(user_id, input_pwd, action="save")
                     st.rerun()
-                elif success is False:
-                    st.error("❌ Invalid credentials.")
                 else:
-                    st.error("❌ Profile not found. Please register.")
-        
+                    st.error("❌ Invalid credentials or profile not found.")
         with mode[1]:
             new_user = st.text_input("New Username", key="reg_user")
             new_pwd = st.text_input("New Password", type="password", key="reg_pwd")
@@ -101,6 +126,7 @@ with st.sidebar:
     st.title("⚾ Settings")
     st.write(f"User: **{st.session_state.current_user}**")
     if st.button("Log Out"):
+        manage_persistent_session(action="logout")
         st.session_state.authenticated = False
         st.rerun()
     
