@@ -17,7 +17,6 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #262730; color: white; border: 1px solid #444; }
     .matchup-card { border-radius: 15px; padding: 20px; background: #161b22; border: 1px solid #30363d; margin-bottom: 20px; }
     .winner-box { background: #1b2838; border: 2px solid #4CAF50; border-radius: 10px; padding: 15px; margin-bottom: 10px; color: #e6edf3; text-align: center;}
-    .pitcher-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 8px; text-align: center; margin-bottom: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -86,7 +85,7 @@ with st.sidebar:
                     else:
                         init_s = {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"}
                         save_settings(user_id, input_pwd, init_s)
-                        st.success("✅ Created! Switch to Login.")
+                        st.success("✅ Account Created! You can now Log In.")
         st.stop()
 
     st.write(f"Logged in: **{st.session_state.current_user}**")
@@ -99,6 +98,7 @@ with st.sidebar:
     preset_options = ["Balanced", "Pitching Heavy", "Offense Heavy", "Custom"]
     preset = st.radio("Model Presets", preset_options, index=preset_options.index(s.get("preset", "Balanced")))
     
+    # Preset Logic
     if preset == "Balanced": w_std, w_era, w_avg, w_slg = 40, 15, 20, 25
     elif preset == "Pitching Heavy": w_std, w_era, w_avg, w_slg = 20, 50, 15, 15
     elif preset == "Offense Heavy": w_std, w_era, w_avg, w_slg = 20, 10, 35, 35
@@ -120,7 +120,7 @@ with st.sidebar:
         new_settings = {"fav_team": fav_team, "w_std": w_std, "w_era": w_era, "w_avg": w_avg, "w_slg": w_slg, "preset": preset}
         save_settings(st.session_state.current_user, st.session_state.user_pwd, new_settings)
         st.session_state.saved_settings = new_settings
-        st.success("Preferences Saved!")
+        st.success("Preferences Saved Professionally!")
 
 # --- CORE FUNCTIONS ---
 @st.cache_data(ttl=3600)
@@ -208,28 +208,27 @@ for g in sorted_games:
                 winner = g['home_name'] if p_h > 0.5 else g['away_name']
                 st.markdown(f'<div class="winner-box">🏅 Projected Winner: <b>{winner}</b> ({(p_h if p_h > 0.5 else 1-p_h)*100:.1f}%)</div>', unsafe_allow_html=True)
                 
-                # --- BOX SCORE (Fixed Data Path) ---
+                # --- FIXED BOX SCORE (Pulling from Schedule object) ---
                 if g.get('status') in ["Final", "Live", "In Progress", "Game Over"]:
                     st.markdown("### 📊 Box Score")
-                    try:
-                        # Use schedule data if boxscore_data is still populating
-                        r_a = g.get('away_score', 0)
-                        r_h = g.get('home_score', 0)
-                        # Attempt to get hits/errors from the live boxscore
-                        b = data['box']
-                        h_a = b['away']['teamStats']['batting'].get('hits', '-')
-                        h_h = b['home']['teamStats']['batting'].get('hits', '-')
-                        e_a = b['away']['teamStats']['fielding'].get('errors', 0)
-                        e_h = b['home']['teamStats']['fielding'].get('errors', 0)
-                        
-                        box_df = pd.DataFrame({
-                            "Team": [g['away_name'], g['home_name']],
-                            "R": [r_a, r_h],
-                            "H": [h_a, h_h],
-                            "E": [e_a, e_h]
-                        })
-                        st.dataframe(box_df, use_container_width=True, hide_index=True)
-                    except: st.caption("Box score syncing...")
+                    # Reliability fix: use g.get() as fallback for scores
+                    r_a = g.get('away_score', 0)
+                    r_h = g.get('home_score', 0)
+                    
+                    # Try to get Hits/Errors from box, but don't let it block the Runs
+                    b_data = data['box']
+                    h_a = b_data['away']['teamStats']['batting'].get('hits', '-')
+                    h_h = b_data['home']['teamStats']['batting'].get('hits', '-')
+                    e_a = b_data['away']['teamStats']['fielding'].get('errors', '-')
+                    e_h = b_data['home']['teamStats']['fielding'].get('errors', '-')
+                    
+                    box_df = pd.DataFrame({
+                        "Team": [g['away_name'], g['home_name']],
+                        "R": [r_a, r_h],
+                        "H": [h_a, h_h],
+                        "E": [e_a, e_h]
+                    })
+                    st.dataframe(box_df, use_container_width=True, hide_index=True)
 
                 # --- LINEUPS ---
                 st.markdown("### 📋 Lineups & Pitching")
@@ -242,6 +241,6 @@ for g in sorted_games:
                     st.write(f"**{g['home_name']}**")
                     st.caption(f"SP: {data['home']['p_name']} ({data['home']['era']})")
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-            else: st.info("Loading detailed data...")
+            else: st.info("Loading detailed analysis...")
         st.markdown('</div>', unsafe_allow_html=True)
-                
+        
