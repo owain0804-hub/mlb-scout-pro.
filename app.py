@@ -161,16 +161,24 @@ def analyze_game(gid, g_info, year, weights):
     def process(side, tid):
         sd = box.get(side, {})
         ps = sd.get('players', {})
-        starters = [p for p in ps.values() if p.get('battingOrder', '').endswith('00')]
+        # UPDATED: Pulls all players with a batting order (1-9 and subs)
+        batters = [p for p in ps.values() if p.get('battingOrder')]
+        # Sort by batting order to display correctly
+        batters.sort(key=lambda x: x['battingOrder'])
+        
         lineup = []
         avgs, slgs = [], []
-        for p in starters:
+        for p in batters:
             try:
                 st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="season")['stats'][0]['stats']
-                lineup.append({"Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-                slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
-            except: avgs.append(0.25); slgs.append(0.40)
+                lineup.append({"#": p['battingOrder'], "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
+                # Only include first 9 in the probability math to keep it consistent
+                if len(avgs) < 9:
+                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+            except: 
+                if len(avgs) < 9: avgs.append(0.25); slgs.append(0.40)
+        
         p_name, era = "TBD", 4.50
         if sd.get('pitchers'):
             try:
@@ -199,7 +207,6 @@ sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
 fav_team = user_data.get("fav", "None")
 user_weights = user_data.get("weights", [30, 30, 20, 20])
 
-# --- NEW: SORT SCHEDULE TO PUT FAVORITE TEAM FIRST ---
 sorted_sched = sorted(sched, key=lambda x: (x['home_name'] != fav_team and x['away_name'] != fav_team))
 
 for g in sorted_sched:
@@ -234,4 +241,4 @@ for g in sorted_sched:
             with c2:
                 st.markdown(f"""<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g['home_id']}.svg" width="20"> {data['home']['p']} (ERA: {data['home']['era']})</div>""", unsafe_allow_html=True)
                 st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-                
+    
