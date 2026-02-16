@@ -33,7 +33,6 @@ def send_admin_notification(new_user):
     except: pass
 
 # --- COOKIE MANAGER ---
-# We initialize this at the top to give it maximum time to load
 cookie_manager = stx.CookieManager()
 
 # --- PAGE CONFIG & THEME ---
@@ -71,23 +70,23 @@ def load_settings(username, password_hash, is_raw_password=True):
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 
-# FIXED: Added a small safety delay and check for cookie readiness
+# FIXED: Safety wrapper for cookie retrieval to stop the "blinking" error
 if not st.session_state.authenticated:
-    try:
-        # We fetch all cookies once to avoid multiple component calls
-        all_cookies = cookie_manager.get_all()
-        if all_cookies:
-            saved_user = all_cookies.get("mlb_user")
-            saved_token = all_cookies.get("mlb_token")
-            if saved_user and saved_token:
-                sets, ok = load_settings(saved_user, saved_token, is_raw_password=False)
-                if ok:
-                    st.session_state.authenticated = True
-                    st.session_state.current_user = saved_user
-                    st.session_state.user_pwd_hash = saved_token
-                    st.session_state.saved_settings = sets
-    except:
-        pass # If cookies aren't ready, we just show the login screen quietly
+    # Give the component a tiny moment to heartbeat with the browser
+    all_cookies = cookie_manager.get_all()
+    
+    # Only proceed if the component has actually returned data
+    if isinstance(all_cookies, dict) and len(all_cookies) > 0:
+        saved_user = all_cookies.get("mlb_user")
+        saved_token = all_cookies.get("mlb_token")
+        
+        if saved_user and saved_token:
+            sets, ok = load_settings(saved_user, saved_token, is_raw_password=False)
+            if ok:
+                st.session_state.authenticated = True
+                st.session_state.current_user = saved_user
+                st.session_state.user_pwd_hash = saved_token
+                st.session_state.saved_settings = sets
 
 if not st.session_state.authenticated:
     st.markdown("<h1 style='text-align:center;'>⚾ MLB Intelligence Pro</h1>", unsafe_allow_html=True)
@@ -103,18 +102,19 @@ if not st.session_state.authenticated:
                     if ok:
                         h = hash_password(pwd)
                         expiry = datetime.now() + timedelta(days=30)
-                        # Setting cookies
+                        
+                        # Set cookies
                         cookie_manager.set("mlb_user", uid, expires_at=expiry)
                         cookie_manager.set("mlb_token", h, expires_at=expiry)
                         
-                        # Set session state immediately
+                        # Update session immediately
                         st.session_state.authenticated = True
                         st.session_state.current_user = uid
                         st.session_state.user_pwd_hash = h
                         st.session_state.saved_settings = s
                         
-                        st.success("Synchronizing session...")
-                        time.sleep(0.8) # Wait slightly longer for browser storage
+                        st.info("Authenticating...")
+                        time.sleep(1) # Allow browser to commit cookies
                         st.rerun()
                     else: st.error("Invalid Credentials")
         with m[1]:
@@ -125,7 +125,6 @@ if not st.session_state.authenticated:
                     save_settings(nu, np, {"fav_team": "None", "w_std": 40, "w_era": 15, "w_avg": 20, "w_slg": 25, "preset": "Balanced"})
                     send_admin_notification(nu)
                     st.success("Account Created! Use the Login tab.")
-                else: st.warning("Username/Password required")
     st.stop()
 
 # --- SIDEBAR ---
@@ -263,4 +262,4 @@ for g in sorted_games:
                     st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True, use_container_width=True)
             else: st.info("Analyzing...")
         st.markdown('</div>', unsafe_allow_html=True)
-        
+    
