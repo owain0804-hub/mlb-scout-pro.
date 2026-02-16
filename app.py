@@ -161,23 +161,25 @@ def analyze_game(gid, g_info, year, weights):
     def process(side, tid):
         sd = box.get(side, {})
         ps = sd.get('players', {})
-        # UPDATED: Pulls all players with a batting order (1-9 and subs)
-        batters = [p for p in ps.values() if p.get('battingOrder')]
-        # Sort by batting order to display correctly
-        batters.sort(key=lambda x: x['battingOrder'])
+        # FIXED: Only pull players with battingOrder ending in '00' (Starters)
+        starters = [p for p in ps.values() if p.get('battingOrder') and p['battingOrder'].endswith('00')]
+        starters.sort(key=lambda x: x['battingOrder'])
         
         lineup = []
         avgs, slgs = [], []
-        for p in batters:
+        for p in starters:
             try:
                 st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="season")['stats'][0]['stats']
-                lineup.append({"#": p['battingOrder'], "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                # Only include first 9 in the probability math to keep it consistent
-                if len(avgs) < 9:
-                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+                lineup.append({
+                    "Order": int(p['battingOrder'][0]), 
+                    "Player": p['person']['fullName'], 
+                    "AVG": st_data.get('avg', '.250'), 
+                    "SLG": st_data.get('slg', '.400')
+                })
+                avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+                slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
             except: 
-                if len(avgs) < 9: avgs.append(0.25); slgs.append(0.40)
+                avgs.append(0.25); slgs.append(0.40)
         
         p_name, era = "TBD", 4.50
         if sd.get('pitchers'):
@@ -241,4 +243,3 @@ for g in sorted_sched:
             with c2:
                 st.markdown(f"""<div class="pitcher-header"><img src="https://www.mlbstatic.com/team-logos/{g['home_id']}.svg" width="20"> {data['home']['p']} (ERA: {data['home']['era']})</div>""", unsafe_allow_html=True)
                 st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-    
