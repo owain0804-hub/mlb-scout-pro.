@@ -47,10 +47,6 @@ users_db = load_users()
 if "auth" not in st.session_state: st.session_state.auth = False
 if "is_guest" not in st.session_state: st.session_state.is_guest = False
 
-saved_user = cookie_manager.get(cookie="mlb_login")
-if not st.session_state.auth and saved_user and saved_user in users_db:
-    st.session_state.auth, st.session_state.username = True, saved_user
-
 # --- LOGIN FLOW ---
 if not st.session_state.auth and not st.session_state.is_guest:
     st.title("⚾ MLB Scout Pro")
@@ -58,15 +54,14 @@ if not st.session_state.auth and not st.session_state.is_guest:
     with t1:
         u = st.text_input("Username", key="login_u")
         p = st.text_input("Password", type="password", key="login_p")
-        col1, col2 = st.columns(2)
-        with col1:
+        c1, c2 = st.columns(2)
+        with c1:
             if st.button("Enter", use_container_width=True):
                 if u in users_db and users_db[u].get('pw') == hash_pw(p):
                     st.session_state.auth, st.session_state.username = True, u
-                    cookie_manager.set("mlb_login", u, expires_at=datetime(2026, 12, 31))
                     st.rerun()
                 else: st.error("Invalid Login.")
-        with col2:
+        with c2:
             if st.button("Continue without Account", use_container_width=True):
                 st.session_state.is_guest, st.session_state.username = True, "Guest"
                 st.rerun()
@@ -82,14 +77,14 @@ with st.sidebar:
     w_era = st.slider("Starter ERA", 0, 100, weights_list[1])
     w_avg = st.slider("Lineup AVG", 0, 100, weights_list[2])
     w_slg = st.slider("Lineup SLG", 0, 100, weights_list[3])
-    if st.button("Logout / Exit"):
+    if st.button("Logout"):
         st.session_state.auth = False; st.session_state.is_guest = False; st.rerun()
 
-# --- DATA ENGINE (WITH SPRING TRAINING FALLBACK) ---
+# --- DATA ENGINE ---
 @st.cache_data(ttl=3600)
 def get_win_pct(tid, year):
-    # Use 2025 data if it's currently Spring Training 2026
-    lookup_year = year - 1 if datetime.now().month < 4 else year
+    # Fallback to 2025 if 2026 data is empty
+    lookup_year = year if datetime.now().month > 3 else 2025
     try:
         s = statsapi.standings_data(leagueId="103,104", season=lookup_year)
         for div in s.values():
@@ -104,16 +99,20 @@ def analyze_game(gid, g_info, year, weights):
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
         starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x['battingOrder'])
-        lineup, avgs, slgs = [], [], []
         
-        # If no live lineup (Spring Training), use placeholder league averages
+        lineup, avgs, slgs = [], [], []
+        # If no boxscore lineup, show "Spring Roster" but still pull 2025 team averages
         if not starters:
-            lineup = [{"Order": i, "Player": "Spring Roster", "AVG": ".260", "SLG": ".410"} for i in range(1, 10)]
-            avg, slg = 0.260, 0.410
+            lineup = [{"Order": i, "Player": "Probable Starter", "AVG": ".250", "SLG": ".400"} for i in range(1, 10)]
+            avg, slg = 0.250, 0.400
         else:
             for p in starters:
                 try:
+                    # Logic: Try 2026 stats, if empty/zero, pull 2025 stats
                     st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="season")['stats'][0]['stats']
+                    if st_data.get('avg') == ".000":
+                        st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="career")['stats'][0]['stats']
+                    
                     lineup.append({"Order": int(p['battingOrder'][0]), "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
                     avgs.append(float(st_data.get('avg', '.250').replace('.','0.'))); slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
                 except: avgs.append(0.25); slgs.append(0.40)
@@ -121,6 +120,17 @@ def analyze_game(gid, g_info, year, weights):
             
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
         era = 4.50
+        # Try to get real ERA for the named pitcher
+        if p_name != "TBD":
+            try:
+                # Search for pitcher ID to get their ERA baseline
+                p_search = statsapi.lookup_player(p_name)[0]
+                p_stats = statsapi.player_stat_data(p_search['id'], group="pitching", type="season")['stats'][0]['stats']
+                era = float(p_stats.get('era', 4.50))
+                if era == 0: # Fallback to career if season is 0.0
+                     era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
+            except: era = 4.50
+
         return {"wpct": get_win_pct(tid, year), "era": era, "avg": avg, "slg": slg, "p": p_name, "lineup": lineup}
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
@@ -167,9 +177,9 @@ for g in sched:
         st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown(f'<div class="pitcher-header">{data["away"]["p"]} (Away)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="pitcher-header">{data["away"]["p"]} (ERA: {data["away"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['away']['lineup']), hide_index=True)
         with c2:
-            st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (Home)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (ERA: {data["home"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-    
+            
