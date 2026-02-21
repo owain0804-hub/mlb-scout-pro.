@@ -54,17 +54,14 @@ if not st.session_state.auth and not st.session_state.is_guest:
     with t1:
         u = st.text_input("Username", key="login_u")
         p = st.text_input("Password", type="password", key="login_p")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("Enter", use_container_width=True):
-                if u in users_db and users_db[u].get('pw') == hash_pw(p):
-                    st.session_state.auth, st.session_state.username = True, u
-                    st.rerun()
-                else: st.error("Invalid Login.")
-        with c2:
-            if st.button("Continue as Guest", use_container_width=True):
-                st.session_state.is_guest, st.session_state.username = True, "Guest"
+        if st.button("Enter", use_container_width=True):
+            if u in users_db and users_db[u].get('pw') == hash_pw(p):
+                st.session_state.auth, st.session_state.username = True, u
                 st.rerun()
+            else: st.error("Invalid Login.")
+        if st.button("Continue as Guest", use_container_width=True):
+            st.session_state.is_guest, st.session_state.username = True, "Guest"
+            st.rerun()
     st.stop()
 
 # --- SIDEBAR ---
@@ -97,48 +94,38 @@ def analyze_game(gid, g_info, year, weights):
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        # Pull actual lineup if available, else pull team roster for Spring Training
-        starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x['battingOrder'])
+        # Filter for starters
+        starters = [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')]
         
-        lineup, avgs, slgs = [], [], []
-        
-        if not starters:
-            # Fallback: Pull active roster if lineup isn't posted yet
+        # SPRING TRAINING FIX: If less than 9 players, backfill from roster
+        if len(starters) < 9:
             try:
-                roster = statsapi.get('team_roster', {'teamId': tid})['roster'][:9]
-                for i, p in enumerate(roster):
-                    p_id = p['person']['id']
-                    p_name = p['person']['fullName']
-                    # Try Season then Career to avoid 0.0
-                    try:
-                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
-                        if st_data.get('avg') == ".000": raise Exception
-                    except:
-                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
-                    
-                    lineup.append({"Order": i+1, "Player": p_name, "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+                roster = statsapi.get('team_roster', {'teamId': tid})['roster']
+                for r_player in roster:
+                    if len(starters) >= 9: break
+                    if r_player['person']['id'] not in [s['person']['id'] for s in starters]:
+                        # Mock the structure expected by the parser
+                        starters.append({'person': r_player['person'], 'battingOrder': f"{len(starters)+1}00"})
+            except: pass
+
+        lineup, avgs, slgs = [], [], []
+        for i, p in enumerate(starters[:9]):
+            p_id = p['person']['id']
+            p_name = p['person']['fullName']
+            try:
+                # Try 2026 Season -> then Career stats to avoid 0.0 impact
+                st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
+                if float(st_data.get('avg', '0').replace('.','0.')) == 0: raise Exception
             except:
-                avg, slg = 0.250, 0.400
-        else:
-            for p in starters:
-                try:
-                    p_id = p['person']['id']
-                    try:
-                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
-                        if st_data.get('avg') == ".000": raise Exception
-                    except:
-                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
-                    
-                    lineup.append({"Order": int(p['battingOrder'][0]), "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
-                except: avgs.append(0.25); slgs.append(0.40)
-        
-        avg = sum(avgs)/max(1, len(avgs)) if avgs else 0.250
-        slg = sum(slgs)/max(1, len(slgs)) if slgs else 0.400
+                try: st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
+                except: st_data = {'avg': '.250', 'slg': '.400'}
             
+            lineup.append({"Order": i+1, "Player": p_name, "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
+            avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+            slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+
+        avg_val = sum(avgs)/max(1, len(avgs))
+        slg_val = sum(slgs)/max(1, len(slgs))
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
         era = 4.50
         if p_name != "TBD":
@@ -152,7 +139,7 @@ def analyze_game(gid, g_info, year, weights):
                     era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
             except: era = 4.50
 
-        return {"wpct": get_win_pct(tid, year), "era": era, "avg": avg, "slg": slg, "p": p_name, "lineup": lineup}
+        return {"wpct": get_win_pct(tid, year), "era": era, "avg": avg_val, "slg": slg_val, "p": p_name, "lineup": lineup}
 
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     uw = [v/100 for v in weights]
@@ -202,4 +189,4 @@ for g in sched:
         with c2:
             st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (ERA: {data["home"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-                                
+            
