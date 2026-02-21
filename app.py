@@ -62,6 +62,19 @@ if not st.session_state.auth and not st.session_state.is_guest:
         if st.button("Continue as Guest", use_container_width=True):
             st.session_state.is_guest, st.session_state.username = True, "Guest"
             st.rerun()
+    with t2:
+        nu = st.text_input("New Username", key="reg_u")
+        np = st.text_input("New Password", type="password", key="reg_p")
+        if st.button("Create Account", use_container_width=True):
+            if nu and np:
+                if nu not in users_db:
+                    users_db[nu] = {"pw": hash_pw(np), "weights": [30, 40, 15, 15]}
+                    save_users(users_db)
+                    st.session_state.auth, st.session_state.username = True, nu
+                    st.success("Account Created! Logging you in...")
+                    st.rerun()
+                else: st.error("Username already exists.")
+            else: st.error("Please fill in all fields.")
     st.stop()
 
 # --- SIDEBAR ---
@@ -93,19 +106,14 @@ def get_live_linescore(gid, g_info):
         data = statsapi.get('game_linescore', {'gamePk': gid})
         innings = data.get('innings', [])
         teams = data.get('teams', {})
-        
         home_abb = g_info.get('home_name', 'HOME')[:3].upper()
         away_abb = g_info.get('away_name', 'AWAY')[:3].upper()
-        
-        # If detail is missing (common in Spring), use Schedule info
         home_r = teams.get('home', {}).get('runs', g_info.get('home_score', 0))
         away_r = teams.get('away', {}).get('runs', g_info.get('away_score', 0))
-        
         score_data = {"Team": [away_abb, home_abb]}
         if innings:
             for i, inn in enumerate(innings):
                 score_data[str(i+1)] = [inn['away'].get('runs', '-'), inn['home'].get('runs', '-')]
-        
         score_data["R"] = [away_r, home_r]
         score_data["H"] = [teams.get('away', {}).get('hits', 0), teams.get('home', {}).get('hits', 0)]
         score_data["E"] = [teams.get('away', {}).get('errors', 0), teams.get('home', {}).get('errors', 0)]
@@ -115,11 +123,9 @@ def get_live_linescore(gid, g_info):
 def analyze_game(gid, g_info, year, weights):
     try: box = statsapi.boxscore_data(gid)
     except: box = {}
-    
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
         starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x.get('battingOrder', '999'))
-        
         if len(starters) < 9:
             try:
                 roster = statsapi.get('team_roster', {'teamId': tid})['roster']
@@ -128,7 +134,6 @@ def analyze_game(gid, g_info, year, weights):
                     if r_player['person']['id'] not in [s['person']['id'] for s in starters]:
                         starters.append({'person': r_player['person'], 'battingOrder': f"{len(starters)+1}00"})
             except: pass
-
         lineup, avgs, slgs = [], [], []
         for i, p in enumerate(starters[:9]):
             p_id = p['person']['id']
@@ -143,7 +148,6 @@ def analyze_game(gid, g_info, year, weights):
             lineup.append({"Order": clean_order, "Player": p_name, "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
             avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
             slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
-
         lineup = sorted(lineup, key=lambda x: x['Order'])
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
         era = 4.50
@@ -156,9 +160,7 @@ def analyze_game(gid, g_info, year, weights):
                 except:
                     era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
             except: era = 4.50
-
         return {"wpct": get_win_pct(tid, year), "era": era, "avg": sum(avgs)/max(1, len(avgs)), "slg": sum(slgs)/max(1, len(slgs)), "p": p_name, "lineup": lineup}
-
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     uw = [v/100 for v in weights]
     imp = {"Win %": (h['wpct'] - a['wpct']) * uw[0], "Starter": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * uw[1], "AVG": (h['avg'] - a['avg']) * (uw[2]*10), "SLG": (h['slg'] - a['slg']) * (uw[3]*7.5)}
@@ -172,24 +174,19 @@ sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
 for g in sched:
     status = g.get('status', 'Scheduled')
     st.markdown(f'<div class="matchup-card"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" class="team-logo"><div style="text-align:center"><b>{g["away_name"]} @ {g["home_name"]}</b><br><span class="status-tag">{status}</span></div><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" class="team-logo"></div>', unsafe_allow_html=True)
-    
     if st.button("Analyze", key=g['game_id'], use_container_width=True):
         data = analyze_game(g['game_id'], g, dt.year, [w_win, w_era, w_avg, w_slg])
         res = g['home_name'] if data['prob'] > 0.5 else g['away_name']
         st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{res}</span></div></div>', unsafe_allow_html=True)
-        
         st.write("### 📊 Scoreboard")
         ls_df = get_live_linescore(g['game_id'], g)
-        if ls_df is not None:
-            st.dataframe(ls_df, hide_index=True, use_container_width=True)
-
+        if ls_df is not None: st.dataframe(ls_df, hide_index=True, use_container_width=True)
         st.write("### 🧠 AI Logic Breakdown")
         st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
         for cat, val in data['imp'].items():
             team_edge = g['home_name'] if val > 0 else g['away_name']
             st.markdown(f"**{cat}:** <span style='color:#4ade80'>{team_edge} Edge</span> <span class='impact-tag'>(+{abs(val)*100:.1f}% Impact)</span>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-        
         c1, c2 = st.columns(2)
         with c1:
             st.markdown(f'<div class="pitcher-header">{data["away"]["p"]} (ERA: {data["away"]["era"]})</div>', unsafe_allow_html=True)
