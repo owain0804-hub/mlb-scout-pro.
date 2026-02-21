@@ -20,6 +20,7 @@ def apply_pro_styles():
         .pitcher-header { background: #161b22; border-bottom: 2px solid #3fb950; padding: 8px; margin-bottom: 5px; border-radius: 4px 4px 0 0; font-weight: bold; display: flex; align-items: center; gap: 10px; }
         .team-logo { width: 40px; height: 40px; }
         .impact-tag { font-size: 0.85em; color: #94a3b8; margin-left: 8px; }
+        .live-score-table { font-family: monospace; font-size: 0.9em; margin-bottom: 20px; border: 1px solid #30363d; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -88,19 +89,33 @@ def get_win_pct(tid, year):
                 if t['team_id'] == tid: return t['w']/(max(1, t['w']+t['l']))
     except: return 0.50
 
+def get_live_linescore(gid):
+    try:
+        data = statsapi.get('game_linescore', {'gamePk': gid})
+        innings = data.get('innings', [])
+        teams = data.get('teams', {})
+        
+        home_name = statsapi.get('team', {'teamId': data['teams']['home']['team']['id']})['teams'][0]['abbreviation']
+        away_name = statsapi.get('team', {'teamId': data['teams']['away']['team']['id']})['teams'][0]['abbreviation']
+        
+        score_data = {"Team": [away_name, home_name]}
+        for i, inn in enumerate(innings):
+            score_data[str(i+1)] = [inn['away'].get('runs', '-'), inn['home'].get('runs', '-')]
+        
+        score_data["R"] = [teams['away'].get('runs', 0), teams['home'].get('runs', 0)]
+        score_data["H"] = [teams['away'].get('hits', 0), teams['home'].get('hits', 0)]
+        score_data["E"] = [teams['away'].get('errors', 0), teams['home'].get('errors', 0)]
+        return pd.DataFrame(score_data)
+    except: return None
+
 def analyze_game(gid, g_info, year, weights):
     try: box = statsapi.boxscore_data(gid)
     except: box = {}
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        # Filter for starters and SORT BY BATTING ORDER STRING (e.g., '100', '200')
-        starters = sorted(
-            [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')],
-            key=lambda x: x.get('battingOrder', '999')
-        )
+        starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x.get('battingOrder', '999'))
         
-        # If fewer than 9, backfill from roster but maintain the order
         if len(starters) < 9:
             try:
                 roster = statsapi.get('team_roster', {'teamId': tid})['roster']
@@ -114,7 +129,6 @@ def analyze_game(gid, g_info, year, weights):
         for i, p in enumerate(starters[:9]):
             p_id = p['person']['id']
             p_name = p['person']['fullName']
-            # Get clean order number (first digit of '100', '200', etc.)
             clean_order = i + 1 if not p.get('battingOrder') else int(p['battingOrder'][0])
             
             try:
@@ -128,9 +142,7 @@ def analyze_game(gid, g_info, year, weights):
             avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
             slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
 
-        # Final sort of the local lineup list just to be safe for display
         lineup = sorted(lineup, key=lambda x: x['Order'])
-
         avg_val = sum(avgs)/max(1, len(avgs))
         slg_val = sum(slgs)/max(1, len(slgs))
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
@@ -182,6 +194,14 @@ for g in sched:
         
         st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{res}</span></div></div>', unsafe_allow_html=True)
         
+        # LIVE BOX SCORE SECTION
+        st.write("### 📊 Live Linescore")
+        ls_df = get_live_linescore(g['game_id'])
+        if ls_df is not None:
+            st.dataframe(ls_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("Live scoring will appear here once the game starts.")
+
         st.write("### 🧠 AI Logic Breakdown")
         st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
         for cat, val in data['imp'].items():
@@ -196,4 +216,4 @@ for g in sched:
         with c2:
             st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (ERA: {data["home"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-                
+    
