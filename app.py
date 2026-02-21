@@ -62,7 +62,7 @@ if not st.session_state.auth and not st.session_state.is_guest:
                     st.rerun()
                 else: st.error("Invalid Login.")
         with c2:
-            if st.button("Continue without Account", use_container_width=True):
+            if st.button("Continue as Guest", use_container_width=True):
                 st.session_state.is_guest, st.session_state.username = True, "Guest"
                 st.rerun()
     st.stop()
@@ -72,7 +72,7 @@ user_data = users_db.get(st.session_state.username, {"weights": [30, 40, 15, 15]
 weights_list = user_data.get("weights", [30, 40, 15, 15])
 
 with st.sidebar:
-    st.write(f"Logged in as: **{st.session_state.username}**")
+    st.write(f"User: **{st.session_state.username}**")
     w_win = st.slider("Win %", 0, 100, weights_list[0])
     w_era = st.slider("Starter ERA", 0, 100, weights_list[1])
     w_avg = st.slider("Lineup AVG", 0, 100, weights_list[2])
@@ -83,7 +83,6 @@ with st.sidebar:
 # --- DATA ENGINE ---
 @st.cache_data(ttl=3600)
 def get_win_pct(tid, year):
-    # Fallback to 2025 if 2026 data is empty
     lookup_year = year if datetime.now().month > 3 else 2025
     try:
         s = statsapi.standings_data(leagueId="103,104", season=lookup_year)
@@ -98,37 +97,59 @@ def analyze_game(gid, g_info, year, weights):
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
+        # Pull actual lineup if available, else pull team roster for Spring Training
         starters = sorted([p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')], key=lambda x: x['battingOrder'])
         
         lineup, avgs, slgs = [], [], []
-        # If no boxscore lineup, show "Spring Roster" but still pull 2025 team averages
+        
         if not starters:
-            lineup = [{"Order": i, "Player": "Probable Starter", "AVG": ".250", "SLG": ".400"} for i in range(1, 10)]
-            avg, slg = 0.250, 0.400
+            # Fallback: Pull active roster if lineup isn't posted yet
+            try:
+                roster = statsapi.get('team_roster', {'teamId': tid})['roster'][:9]
+                for i, p in enumerate(roster):
+                    p_id = p['person']['id']
+                    p_name = p['person']['fullName']
+                    # Try Season then Career to avoid 0.0
+                    try:
+                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
+                        if st_data.get('avg') == ".000": raise Exception
+                    except:
+                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
+                    
+                    lineup.append({"Order": i+1, "Player": p_name, "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
+                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+            except:
+                avg, slg = 0.250, 0.400
         else:
             for p in starters:
                 try:
-                    # Logic: Try 2026 stats, if empty/zero, pull 2025 stats
-                    st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="season")['stats'][0]['stats']
-                    if st_data.get('avg') == ".000":
-                        st_data = statsapi.player_stat_data(p['person']['id'], group="hitting", type="career")['stats'][0]['stats']
+                    p_id = p['person']['id']
+                    try:
+                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
+                        if st_data.get('avg') == ".000": raise Exception
+                    except:
+                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
                     
                     lineup.append({"Order": int(p['battingOrder'][0]), "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.'))); slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
                 except: avgs.append(0.25); slgs.append(0.40)
-            avg, slg = sum(avgs)/max(1, len(avgs)), sum(slgs)/max(1, len(slgs))
+        
+        avg = sum(avgs)/max(1, len(avgs)) if avgs else 0.250
+        slg = sum(slgs)/max(1, len(slgs)) if slgs else 0.400
             
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
         era = 4.50
-        # Try to get real ERA for the named pitcher
         if p_name != "TBD":
             try:
-                # Search for pitcher ID to get their ERA baseline
                 p_search = statsapi.lookup_player(p_name)[0]
-                p_stats = statsapi.player_stat_data(p_search['id'], group="pitching", type="season")['stats'][0]['stats']
-                era = float(p_stats.get('era', 4.50))
-                if era == 0: # Fallback to career if season is 0.0
-                     era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
+                try:
+                    p_stats = statsapi.player_stat_data(p_search['id'], group="pitching", type="season")['stats'][0]['stats']
+                    era = float(p_stats.get('era', 4.50))
+                    if era == 0: raise Exception
+                except:
+                    era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
             except: era = 4.50
 
         return {"wpct": get_win_pct(tid, year), "era": era, "avg": avg, "slg": slg, "p": p_name, "lineup": lineup}
@@ -174,7 +195,6 @@ for g in sched:
             st.markdown(f"**{cat}:** <span style='color:#4ade80'>{team_edge} Edge</span> <span class='impact-tag'>(+{abs(val)*100:.1f}% Impact)</span>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
         
-        st.table(pd.DataFrame({"Team": [g['away_name'], g['home_name']], "R": [g.get('away_score', 0), g.get('home_score', 0)]}))
         c1, c2 = st.columns(2)
         with c1:
             st.markdown(f'<div class="pitcher-header">{data["away"]["p"]} (ERA: {data["away"]["era"]})</div>', unsafe_allow_html=True)
@@ -182,4 +202,4 @@ for g in sched:
         with c2:
             st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (ERA: {data["home"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-            
+                                
