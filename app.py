@@ -94,17 +94,19 @@ def analyze_game(gid, g_info, year, weights):
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        # Filter for starters
-        starters = [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')]
+        # Filter for starters and SORT BY BATTING ORDER STRING (e.g., '100', '200')
+        starters = sorted(
+            [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00')],
+            key=lambda x: x.get('battingOrder', '999')
+        )
         
-        # SPRING TRAINING FIX: If less than 9 players, backfill from roster
+        # If fewer than 9, backfill from roster but maintain the order
         if len(starters) < 9:
             try:
                 roster = statsapi.get('team_roster', {'teamId': tid})['roster']
                 for r_player in roster:
                     if len(starters) >= 9: break
                     if r_player['person']['id'] not in [s['person']['id'] for s in starters]:
-                        # Mock the structure expected by the parser
                         starters.append({'person': r_player['person'], 'battingOrder': f"{len(starters)+1}00"})
             except: pass
 
@@ -112,17 +114,22 @@ def analyze_game(gid, g_info, year, weights):
         for i, p in enumerate(starters[:9]):
             p_id = p['person']['id']
             p_name = p['person']['fullName']
+            # Get clean order number (first digit of '100', '200', etc.)
+            clean_order = i + 1 if not p.get('battingOrder') else int(p['battingOrder'][0])
+            
             try:
-                # Try 2026 Season -> then Career stats to avoid 0.0 impact
                 st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
                 if float(st_data.get('avg', '0').replace('.','0.')) == 0: raise Exception
             except:
                 try: st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
                 except: st_data = {'avg': '.250', 'slg': '.400'}
             
-            lineup.append({"Order": i+1, "Player": p_name, "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
+            lineup.append({"Order": clean_order, "Player": p_name, "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
             avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
             slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+
+        # Final sort of the local lineup list just to be safe for display
+        lineup = sorted(lineup, key=lambda x: x['Order'])
 
         avg_val = sum(avgs)/max(1, len(avgs))
         slg_val = sum(slgs)/max(1, len(slgs))
@@ -189,4 +196,4 @@ for g in sched:
         with c2:
             st.markdown(f'<div class="pitcher-header">{data["home"]["p"]} (ERA: {data["home"]["era"]})</div>', unsafe_allow_html=True)
             st.dataframe(pd.DataFrame(data['home']['lineup']), hide_index=True)
-            
+                
