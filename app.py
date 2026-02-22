@@ -85,8 +85,8 @@ weights_list = user_data.get("weights", [30, 40, 15, 15])
 
 with st.sidebar:
     st.write(f"User: **{st.session_state.username}**")
-    teams = statsapi.get('teams', {'sportId': 1})['teams']
-    team_list = sorted([t['name'] for t in teams])
+    teams_data = statsapi.get('teams', {'sportId': 1})['teams']
+    team_list = sorted([t['name'] for t in teams_data])
     idx = team_list.index(user_data["fav_team"]) if user_data.get("fav_team") in team_list else 0
     fav_select = st.selectbox("Favorite Team", team_list, index=idx)
     
@@ -106,25 +106,34 @@ with st.sidebar:
         st.session_state.auth = False; st.session_state.is_guest = False; st.rerun()
 
 # --- DATA ENGINE ---
+@st.cache_data(ttl=3600)
+def get_accurate_win_pct(tid):
+    try:
+        # Pull 2025 standings for the most accurate recent win %
+        s = statsapi.standings_data(leagueId="103,104", season=2025)
+        for div in s.values():
+            for t in div['teams']:
+                if t['team_id'] == tid: return t['w']/(max(1, t['w']+t['l']))
+    except: return 0.50
+
 def analyze_game(gid, g_info, year, weights):
     try: box = statsapi.boxscore_data(gid)
     except: box = {}
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        # Only pull if they are marked as starters in the boxscore
         starters = [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00') and p['position']['code'] != '1']
         starters = sorted(starters, key=lambda x: x.get('battingOrder', '999'))
         
         lineup_released = True if starters else False
-        lineup = []
-        avgs, slgs = [], []
+        lineup, avgs, slgs = [], [], []
         
         if lineup_released:
             for i, p in enumerate(starters[:9]):
                 p_id = p['person']['id']
                 try:
-                    st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
+                    # Priority: 2025 Regular Season Hitting Stats
+                    st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
                 except:
                     st_data = {'avg': '.250', 'slg': '.400'}
                 lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
@@ -136,16 +145,20 @@ def analyze_game(gid, g_info, year, weights):
         if p_name != "TBD":
             try:
                 p_search = statsapi.lookup_player(p_name)[0]
-                try: era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season")['stats'][0]['stats'].get('era', 4.50))
-                except: era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
+                try:
+                    # Priority: 2025 Regular Season Pitching Stats
+                    era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
+                except:
+                    era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
             except: pass
-        return {"era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
+        return {"wpct": get_accurate_win_pct(tid), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
     
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     uw = [v/100 for v in weights]
     
     impacts = {
-        "Pitching Edge": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * uw[1],
+        "Win % Edge": (h['wpct'] - a['wpct']) * (uw[0] * 0.5),
+        "Pitching Edge": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * (uw[1] * 0.4),
         "Contact Edge": (h['avg'] - a['avg']) * (uw[2] * 5),
         "Power Edge": (h['slg'] - a['slg']) * (uw[3] * 3)
     }
@@ -171,6 +184,8 @@ for g in sched:
         
         st.write(f"### 🧠 Winning Logic Analysis")
         st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+        # Detailed Accuracy List
+        st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
         st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
         for factor, val in data['impacts'].items():
             team_with_edge = g['home_name'] if val > 0 else g['away_name']
@@ -184,4 +199,4 @@ for g in sched:
                 if t_data["released"]:
                     st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
                 else:
-                    st.warning("Lineups not yet released")
+                    st.warning("Official Lineup not yet released")
