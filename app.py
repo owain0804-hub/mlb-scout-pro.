@@ -112,27 +112,25 @@ def analyze_game(gid, g_info, year, weights):
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
+        # Only pull if they are marked as starters in the boxscore
         starters = [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00') and p['position']['code'] != '1']
         starters = sorted(starters, key=lambda x: x.get('battingOrder', '999'))
-        is_proj = len(starters) < 9
-        if is_proj:
-            roster = statsapi.get('team_roster', {'teamId': tid})['roster']
-            hitters = [p for p in roster if p['position']['type'] != 'Pitcher']
-            for r_player in hitters[:9]:
-                if len(starters) < 9 and r_player['person']['id'] not in [s['person']['id'] for s in starters]:
-                    starters.append({'person': r_player['person'], 'battingOrder': f"{len(starters)+1}00"})
-        lineup, avgs, slgs = [], [], []
-        for i, p in enumerate(starters[:9]):
-            p_id = p['person']['id']
-            try:
-                st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
-                if float(st_data.get('avg', '0').replace('.','0.')) == 0: raise Exception
-            except:
-                try: st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
-                except: st_data = {'avg': '.250', 'slg': '.400'}
-            lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-            avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-            slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+        
+        lineup_released = True if starters else False
+        lineup = []
+        avgs, slgs = [], []
+        
+        if lineup_released:
+            for i, p in enumerate(starters[:9]):
+                p_id = p['person']['id']
+                try:
+                    st_data = statsapi.player_stat_data(p_id, group="hitting", type="season")['stats'][0]['stats']
+                except:
+                    st_data = {'avg': '.250', 'slg': '.400'}
+                lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
+                avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+                slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
         era = 4.50
         if p_name != "TBD":
@@ -141,7 +139,7 @@ def analyze_game(gid, g_info, year, weights):
                 try: era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season")['stats'][0]['stats'].get('era', 4.50))
                 except: era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
             except: pass
-        return {"era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "proj": is_proj}
+        return {"era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
     
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     uw = [v/100 for v in weights]
@@ -173,9 +171,7 @@ for g in sched:
         
         st.write(f"### 🧠 Winning Logic Analysis")
         st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
-        # ERA Context
         st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
-        # Detailed Impact
         for factor, val in data['impacts'].items():
             team_with_edge = g['home_name'] if val > 0 else g['away_name']
             st.markdown(f"**{factor}:** Advantage {team_with_edge} <span class='impact-tag'>+{abs(val)*100:.1f}% Win Chance</span>", unsafe_allow_html=True)
@@ -184,5 +180,8 @@ for g in sched:
         c1, c2 = st.columns(2)
         for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
             with col:
-                st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_
-                                  
+                st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
+                if t_data["released"]:
+                    st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
+                else:
+                    st.warning("Lineups not yet released")
