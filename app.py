@@ -53,7 +53,7 @@ if "is_guest" not in st.session_state: st.session_state.is_guest = False
 
 # --- LOGIN FLOW ---
 if not st.session_state.auth and not st.session_state.is_guest:
-    st.title(" MLB Scout Pro")
+    st.title("⚾ MLB Scout Pro")
     t1, t2 = st.tabs(["Login", "Register"])
     with t1:
         u = st.text_input("Username", key="login_u")
@@ -95,21 +95,16 @@ with st.sidebar:
     w_avg = st.slider("Lineup AVG Weight", 0, 100, weights_list[2])
     w_slg = st.slider("Lineup SLG Weight", 0, 100, weights_list[3])
     
-    if st.button(" Save Preferences", use_container_width=True):
+    if st.button("💾 Save Preferences", use_container_width=True):
         users_db[st.session_state.username]["fav_team"] = fav_select
         users_db[st.session_state.username]["weights"] = [w_win, w_era, w_avg, w_slg]
         save_users(users_db)
         st.success("Settings Saved!")
 
-    if st.button("Logout"):
-        cookie_manager.delete("mlb_pro_user")
-        st.session_state.auth = False; st.session_state.is_guest = False; st.rerun()
-
 # --- DATA ENGINE ---
 @st.cache_data(ttl=3600)
 def get_accurate_win_pct(tid):
     try:
-        # Pull 2025 standings for the most accurate recent win %
         s = statsapi.standings_data(leagueId="103,104", season=2025)
         for div in s.values():
             for t in div['teams']:
@@ -117,8 +112,12 @@ def get_accurate_win_pct(tid):
     except: return 0.50
 
 def analyze_game(gid, g_info, year, weights):
-    try: box = statsapi.boxscore_data(gid)
-    except: box = {}
+    try: 
+        box = statsapi.boxscore_data(gid)
+        # Safety Check for past games with missing player data
+        if 'away' not in box or 'home' not in box:
+            return None
+    except: return None
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
@@ -132,7 +131,6 @@ def analyze_game(gid, g_info, year, weights):
             for i, p in enumerate(starters[:9]):
                 p_id = p['person']['id']
                 try:
-                    # Priority: 2025 Regular Season Hitting Stats
                     st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
                 except:
                     st_data = {'avg': '.250', 'slg': '.400'}
@@ -146,7 +144,6 @@ def analyze_game(gid, g_info, year, weights):
             try:
                 p_search = statsapi.lookup_player(p_name)[0]
                 try:
-                    # Priority: 2025 Regular Season Pitching Stats
                     era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
                 except:
                     era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
@@ -178,25 +175,28 @@ for g in sched:
     
     if st.button("Analyze", key=g['game_id'], use_container_width=True):
         data = analyze_game(g['game_id'], g, dt.year, [w_win, w_era, w_avg, w_slg])
-        winner = g['home_name'] if data['prob'] > 0.5 else g['away_name']
         
-        st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
-        
-        st.write(f"### Winning Logic Analysis")
-        st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
-        # Detailed Accuracy List
-        st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
-        st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
-        for factor, val in data['impacts'].items():
-            team_with_edge = g['home_name'] if val > 0 else g['away_name']
-            st.markdown(f"**{factor}:** Advantage {team_with_edge} <span class='impact-tag'>+{abs(val)*100:.1f}% Win Chance</span>", unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        if data is None:
+            st.error("Historical boxscore data for this game is currently unavailable.")
+        else:
+            winner = g['home_name'] if data['prob'] > 0.5 else g['away_name']
+            st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
+            
+            st.write(f"### 🧠 AI Logic Breakdown")
+            st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+            st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
+            st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
+            for factor, val in data['impacts'].items():
+                team_with_edge = g['home_name'] if val > 0 else g['away_name']
+                st.markdown(f"**{factor}:** Advantage {team_with_edge} <span class='impact-tag'>+{abs(val)*100:.1f}% Impact</span>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        c1, c2 = st.columns(2)
-        for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
-            with col:
-                st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
-                if t_data["released"]:
-                    st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
-                else:
-                    st.warning("Official Lineup not yet released")
+            c1, c2 = st.columns(2)
+            for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
+                with col:
+                    st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
+                    if t_data["released"]:
+                        st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
+                    else:
+                        st.warning("Official Lineup not yet released")
+    
