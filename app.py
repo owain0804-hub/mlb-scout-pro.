@@ -114,56 +114,61 @@ def get_accurate_win_pct(tid):
 def analyze_game(gid, g_info, year, weights):
     try: 
         box = statsapi.boxscore_data(gid)
-        # CRITICAL FIX: Ensure boxscore actually contains the necessary keys
         if not box or 'away' not in box or 'home' not in box:
             return None
-    except: return None
-    
-    def process(side, tid):
-        # Additional deep check for players list
-        side_data = box.get(side, {})
-        players_data = side_data.get('players', {})
-        
-        starters = [p for p in players_data.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00') and p['position']['code'] != '1']
-        starters = sorted(starters, key=lambda x: x.get('battingOrder', '999'))
-        
-        lineup_released = True if starters else False
-        lineup, avgs, slgs = [], [], []
-        
-        if lineup_released:
-            for i, p in enumerate(starters[:9]):
-                p_id = p['person']['id']
-                try:
-                    st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
-                except:
-                    st_data = {'avg': '.250', 'slg': '.400'}
-                lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-                slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+            
+        def process(side, tid):
+            side_data = box.get(side, {})
+            players_data = side_data.get('players', {})
+            
+            # FIX: Added nested get() and null checks to prevent KeyError on position code
+            starters = [
+                p for p in players_data.values() 
+                if p.get('battingOrder') and p.get('battingOrder', '').endswith('00') 
+                and p.get('position', {}).get('code') != '1'
+            ]
+            starters = sorted(starters, key=lambda x: x.get('battingOrder', '999'))
+            
+            lineup_released = True if starters else False
+            lineup, avgs, slgs = [], [], []
+            
+            if lineup_released:
+                for i, p in enumerate(starters[:9]):
+                    p_id = p['person']['id']
+                    try:
+                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
+                    except:
+                        st_data = {'avg': '.250', 'slg': '.400'}
+                    lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
+                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
+                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
 
-        p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
-        era = 4.50
-        if p_name != "TBD":
-            try:
-                p_search = statsapi.lookup_player(p_name)[0]
+            p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
+            era = 4.50
+            if p_name != "TBD":
                 try:
-                    era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
-                except:
-                    era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career", season=2025)['stats'][0]['stats'].get('era', 4.50))
-            except: pass
-        return {"wpct": get_accurate_win_pct(tid), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
-    
-    a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
-    uw = [v/100 for v in weights]
-    
-    impacts = {
-        "Win % Edge": (h['wpct'] - a['wpct']) * (uw[0] * 0.5),
-        "Pitching Edge": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * (uw[1] * 0.4),
-        "Contact Edge": (h['avg'] - a['avg']) * (uw[2] * 5),
-        "Power Edge": (h['slg'] - a['slg']) * (uw[3] * 3)
-    }
-    prob = 0.52 + sum(impacts.values())
-    return {"prob": max(0.01, min(0.99, prob)), "away": a, "home": h, "impacts": impacts}
+                    p_search = statsapi.lookup_player(p_name)[0]
+                    try:
+                        era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
+                    except:
+                        era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career", season=2025)['stats'][0]['stats'].get('era', 4.50))
+                except: pass
+            return {"wpct": get_accurate_win_pct(tid), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
+        
+        a = process('away', g_info['away_id'])
+        h = process('home', g_info['home_id'])
+        
+        uw = [v/100 for v in weights]
+        impacts = {
+            "Win % Edge": (h['wpct'] - a['wpct']) * (uw[0] * 0.5),
+            "Pitching Edge": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * (uw[1] * 0.4),
+            "Contact Edge": (h['avg'] - a['avg']) * (uw[2] * 5),
+            "Power Edge": (h['slg'] - a['slg']) * (uw[3] * 3)
+        }
+        prob = 0.52 + sum(impacts.values())
+        return {"prob": max(0.01, min(0.99, prob)), "away": a, "home": h, "impacts": impacts}
+    except Exception as e:
+        return None
 
 # --- MAIN UI ---
 dt = st.date_input("Date", datetime.now())
@@ -180,7 +185,7 @@ for g in sched:
         data = analyze_game(g['game_id'], g, dt.year, [w_win, w_era, w_avg, w_slg])
         
         if data is None:
-            st.warning("Game data is currently incomplete or unavailable in the MLB API (Common for just-finished or Spring Training games).")
+            st.warning("Game data is currently incomplete or unavailable in the MLB API.")
         else:
             winner = g['home_name'] if data['prob'] > 0.5 else g['away_name']
             st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
@@ -202,4 +207,3 @@ for g in sched:
                         st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
                     else:
                         st.warning("Official Lineup not yet released")
-                                     
