@@ -53,7 +53,7 @@ if "is_guest" not in st.session_state: st.session_state.is_guest = False
 
 # --- LOGIN FLOW ---
 if not st.session_state.auth and not st.session_state.is_guest:
-    st.title("⚾ MLB Scout Pro")
+    st.title(" MLB Scout Pro")
     t1, t2 = st.tabs(["Login", "Register"])
     with t1:
         u = st.text_input("Username", key="login_u")
@@ -95,7 +95,7 @@ with st.sidebar:
     w_avg = st.slider("Lineup AVG Weight", 0, 100, weights_list[2])
     w_slg = st.slider("Lineup SLG Weight", 0, 100, weights_list[3])
     
-    if st.button("💾 Save Preferences", use_container_width=True):
+    if st.button(" Save Preferences", use_container_width=True):
         users_db[st.session_state.username]["fav_team"] = fav_select
         users_db[st.session_state.username]["weights"] = [w_win, w_era, w_avg, w_slg]
         save_users(users_db)
@@ -182,7 +182,7 @@ for g in sched:
         
         st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
         
-        st.write(f"### 🧠 Winning Logic Analysis")
+        st.write(f"### Winning Logic Analysis")
         st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
         # Detailed Accuracy List
         st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
