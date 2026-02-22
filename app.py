@@ -120,8 +120,6 @@ def analyze_game(gid, g_info, year, weights):
         def process(side, tid):
             side_data = box.get(side, {})
             players_data = side_data.get('players', {})
-            
-            # FIX: Added nested get() and null checks to prevent KeyError on position code
             starters = [
                 p for p in players_data.values() 
                 if p.get('battingOrder') and p.get('battingOrder', '').endswith('00') 
@@ -155,9 +153,7 @@ def analyze_game(gid, g_info, year, weights):
                 except: pass
             return {"wpct": get_accurate_win_pct(tid), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
         
-        a = process('away', g_info['away_id'])
-        h = process('home', g_info['home_id'])
-        
+        a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
         uw = [v/100 for v in weights]
         impacts = {
             "Win % Edge": (h['wpct'] - a['wpct']) * (uw[0] * 0.5),
@@ -167,43 +163,58 @@ def analyze_game(gid, g_info, year, weights):
         }
         prob = 0.52 + sum(impacts.values())
         return {"prob": max(0.01, min(0.99, prob)), "away": a, "home": h, "impacts": impacts}
-    except Exception as e:
-        return None
+    except: return None
 
 # --- MAIN UI ---
-dt = st.date_input("Date", datetime.now())
-sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
-fav = user_data.get("fav_team")
-if fav:
-    sched = sorted(sched, key=lambda x: (fav not in x['away_name'] and fav not in x['home_name']))
+main_tabs = st.tabs(["Matchups", "How to Use"])
 
-for g in sched:
-    is_fav = fav and (fav in g['away_name'] or fav in g['home_name'])
-    st.markdown(f'<div class="matchup-card" style="border-color: {"#8b5cf6" if is_fav else "#30363d"}"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" class="team-logo"><div style="text-align:center"><b>{g["away_name"]} @ {g["home_name"]}</b><br><span class="status-tag">{g.get("status")}</span></div><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" class="team-logo"></div>', unsafe_allow_html=True)
-    
-    if st.button("Analyze", key=g['game_id'], use_container_width=True):
-        data = analyze_game(g['game_id'], g, dt.year, [w_win, w_era, w_avg, w_slg])
+with main_tabs[0]:
+    dt = st.date_input("Date", datetime.now())
+    sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
+    fav = user_data.get("fav_team")
+    if fav:
+        sched = sorted(sched, key=lambda x: (fav not in x['away_name'] and fav not in x['home_name']))
+
+    for g in sched:
+        is_fav = fav and (fav in g['away_name'] or fav in g['home_name'])
+        st.markdown(f'<div class="matchup-card" style="border-color: {"#8b5cf6" if is_fav else "#30363d"}"><img src="https://www.mlbstatic.com/team-logos/{g["away_id"]}.svg" class="team-logo"><div style="text-align:center"><b>{g["away_name"]} @ {g["home_name"]}</b><br><span class="status-tag">{g.get("status")}</span></div><img src="https://www.mlbstatic.com/team-logos/{g["home_id"]}.svg" class="team-logo"></div>', unsafe_allow_html=True)
         
-        if data is None:
-            st.warning("Game data is currently incomplete or unavailable in the MLB API.")
-        else:
-            winner = g['home_name'] if data['prob'] > 0.5 else g['away_name']
-            st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
-            
-            st.write(f"### 🧠 AI Logic Breakdown")
-            st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
-            st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
-            st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
-            for factor, val in data['impacts'].items():
-                team_with_edge = g['home_name'] if val > 0 else g['away_name']
-                st.markdown(f"**{factor}:** Advantage {team_with_edge} <span class='impact-tag'>+{abs(val)*100:.1f}% Impact</span>", unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+        if st.button("Analyze", key=g['game_id'], use_container_width=True):
+            data = analyze_game(g['game_id'], g, dt.year, [w_win, w_era, w_avg, w_slg])
+            if data is None:
+                st.warning("Game data is currently incomplete or unavailable in the MLB API.")
+            else:
+                winner = g['home_name'] if data['prob'] > 0.5 else g['away_name']
+                st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
+                st.write(f"### 🧠 AI Logic Breakdown")
+                st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+                st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
+                st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
+                for factor, val in data['impacts'].items():
+                    team_with_edge = g['home_name'] if val > 0 else g['away_name']
+                    st.markdown(f"**{factor}:** Advantage {team_with_edge} <span class='impact-tag'>+{abs(val)*100:.1f}% Impact</span>", unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
 
-            c1, c2 = st.columns(2)
-            for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
-                with col:
-                    st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
-                    if t_data["released"]:
-                        st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
-                    else:
-                        st.warning("Official Lineup not yet released")
+                c1, c2 = st.columns(2)
+                for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
+                    with col:
+                        st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
+                        if t_data["released"]:
+                            st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
+                        else:
+                            st.warning("Official Lineup not yet released")
+
+with main_tabs[1]:
+    st.title("📖 How to Use MLB Scout Pro")
+    st.write("This app uses a custom AI logic engine to analyze MLB matchups. Use the sidebar to tune the weights according to what you value most in a winning team.")
+    
+    st.subheader("🎚️ Understanding the Sliders")
+    st.markdown("""
+    * **Win % Weight:** Determines how much a team's overall season success (2025 Standing) influences the prediction. High weight favors consistently winning teams.
+    * **Starter ERA Weight:** Influences the impact of the starting pitcher's Earned Run Average. Higher weights give more 'Win Chance' to the team with the lower ERA.
+    * **Lineup AVG Weight:** Adjusts how much the team's ability to get hits (Contact) matters. High weight favors high-average hitters.
+    * **Lineup SLG Weight:** Adjusts the impact of Power (Slugging). High weight favors teams that hit more extra-base hits and home runs.
+    """)
+    
+    st.subheader("🛡️ Data Protection")
+    st.write("The app locks lineups until they are officially released by the MLB. If you see 'Official Lineup not yet released', the AI is waiting for the confirmed daily roster to ensure accuracy.")
