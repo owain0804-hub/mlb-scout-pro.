@@ -19,7 +19,7 @@ def apply_pro_styles():
         .status-tag { font-size: 0.7em; padding: 2px 6px; border-radius: 4px; background: #30363d; color: #8b949e; }
         .pitcher-header { background: #161b22; border-bottom: 2px solid #3fb950; padding: 8px; margin-bottom: 5px; border-radius: 4px 4px 0 0; font-weight: bold; display: flex; align-items: center; gap: 10px; }
         .team-logo { width: 40px; height: 40px; }
-        .impact-tag { font-size: 0.85em; color: #4ade80; font-weight: bold; margin-left: 8px; }
+        .impact-tag { font-size: 0.85em; color: #4ade80; font-weight: bold; margin-left: 5px; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -85,7 +85,6 @@ weights_list = user_data.get("weights", [30, 40, 15, 15])
 
 with st.sidebar:
     st.write(f"User: **{st.session_state.username}**")
-    
     teams = statsapi.get('teams', {'sportId': 1})['teams']
     team_list = sorted([t['name'] for t in teams])
     idx = team_list.index(user_data["fav_team"]) if user_data.get("fav_team") in team_list else 0
@@ -107,36 +106,21 @@ with st.sidebar:
         st.session_state.auth = False; st.session_state.is_guest = False; st.rerun()
 
 # --- DATA ENGINE ---
-@st.cache_data(ttl=3600)
-def get_win_pct(tid, year):
-    try:
-        s = statsapi.standings_data(leagueId="103,104", season=2025) # Use last full season for baseline
-        for div in s.values():
-            for t in div['teams']:
-                if t['team_id'] == tid: return t['w']/(max(1, t['w']+t['l']))
-    except: return 0.50
-
 def analyze_game(gid, g_info, year, weights):
     try: box = statsapi.boxscore_data(gid)
     except: box = {}
     
     def process(side, tid):
         sd = box.get(side, {}); ps = sd.get('players', {})
-        # Filter for position players (No Pitchers in the lineup)
         starters = [p for p in ps.values() if p.get('battingOrder', '') and p.get('battingOrder', '').endswith('00') and p['position']['code'] != '1']
         starters = sorted(starters, key=lambda x: x.get('battingOrder', '999'))
-        
-        is_projected = False
-        if len(starters) < 9:
-            is_projected = True
-            try:
-                roster = statsapi.get('team_roster', {'teamId': tid})['roster']
-                hitters = [p for p in roster if p['position']['type'] != 'Pitcher']
-                for r_player in hitters[:9]:
-                    if len(starters) < 9 and r_player['person']['id'] not in [s['person']['id'] for s in starters]:
-                        starters.append({'person': r_player['person'], 'battingOrder': f"{len(starters)+1}00"})
-            except: pass
-            
+        is_proj = len(starters) < 9
+        if is_proj:
+            roster = statsapi.get('team_roster', {'teamId': tid})['roster']
+            hitters = [p for p in roster if p['position']['type'] != 'Pitcher']
+            for r_player in hitters[:9]:
+                if len(starters) < 9 and r_player['person']['id'] not in [s['person']['id'] for s in starters]:
+                    starters.append({'person': r_player['person'], 'battingOrder': f"{len(starters)+1}00"})
         lineup, avgs, slgs = [], [], []
         for i, p in enumerate(starters[:9]):
             p_id = p['person']['id']
@@ -149,7 +133,6 @@ def analyze_game(gid, g_info, year, weights):
             lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
             avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
             slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
-            
         p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
         era = 4.50
         if p_name != "TBD":
@@ -158,20 +141,17 @@ def analyze_game(gid, g_info, year, weights):
                 try: era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season")['stats'][0]['stats'].get('era', 4.50))
                 except: era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career")['stats'][0]['stats'].get('era', 4.50))
             except: pass
-        return {"wpct": get_win_pct(tid, year), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "proj": is_projected}
+        return {"era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "proj": is_proj}
     
     a, h = process('away', g_info['away_id']), process('home', g_info['home_id'])
     uw = [v/100 for v in weights]
     
-    # Impact Calculation (Percentage added to Win Prob)
     impacts = {
-        "Record Edge": (h['wpct'] - a['wpct']) * uw[0],
         "Pitching Edge": ((4.5/max(0.1, h['era'])) - (4.5/max(0.1, a['era']))) * uw[1],
-        "Contact Edge": (h['avg'] - a['avg']) * (uw[2] * 5), # Scaled for readability
+        "Contact Edge": (h['avg'] - a['avg']) * (uw[2] * 5),
         "Power Edge": (h['slg'] - a['slg']) * (uw[3] * 3)
     }
-    
-    prob = 0.50 + sum(impacts.values()) + 0.02 # Home field advantage +2%
+    prob = 0.52 + sum(impacts.values())
     return {"prob": max(0.01, min(0.99, prob)), "away": a, "home": h, "impacts": impacts}
 
 # --- MAIN UI ---
@@ -191,18 +171,18 @@ for g in sched:
         
         st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
         
-        # --- NEW WHY TEAM WINS SECTION ---
-        st.write(f"### 🧠 Why {winner} is Favored")
+        st.write(f"### 🧠 Winning Logic Analysis")
         st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
+        # ERA Context
+        st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
+        # Detailed Impact
         for factor, val in data['impacts'].items():
-            if (data['prob'] > 0.5 and val > 0) or (data['prob'] < 0.5 and val < 0):
-                st.markdown(f"✅ **{factor}:** Contributes <span class='impact-tag'>+{abs(val)*100:.1f}%</span> to victory chance.", unsafe_allow_html=True)
+            team_with_edge = g['home_name'] if val > 0 else g['away_name']
+            st.markdown(f"**{factor}:** Advantage {team_with_edge} <span class='impact-tag'>+{abs(val)*100:.1f}% Win Chance</span>", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
         c1, c2 = st.columns(2)
         for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
             with col:
-                st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
-                st.caption("Projected Starters" if t_data["proj"] else "Live Lineup")
-                st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
-                    
+                st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_
+                                  
