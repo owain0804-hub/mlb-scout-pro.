@@ -20,6 +20,7 @@ def apply_pro_styles():
         .pitcher-header { background: #161b22; border-bottom: 2px solid #3fb950; padding: 8px; margin-bottom: 5px; border-radius: 4px 4px 0 0; font-weight: bold; display: flex; align-items: center; gap: 10px; }
         .team-logo { width: 40px; height: 40px; }
         .impact-tag { font-size: 0.85em; color: #4ade80; font-weight: bold; margin-left: 5px; }
+        .scout-tip { background: #1e293b; border-left: 4px solid #3fb950; padding: 10px; margin: 10px 0; font-style: italic; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -129,18 +130,27 @@ def analyze_game(gid, g_info, year, weights):
             if lineup_released:
                 for i, p in enumerate(starters[:9]):
                     p_id = p['person']['id']
+                    st_data = {'avg': '.000', 'slg': '.000'}
+                    # TRIPLE LAYER DATA PULL
                     try:
+                        # Layer 1: 2026
                         cur = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2026)['stats'][0]['stats']
-                        if int(cur.get('atBats', 0)) >= 15:
-                            st_data = cur
-                        else:
-                            st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
+                        if int(cur.get('atBats', 0)) >= 15: st_data = cur
+                        else: raise ValueError
                     except:
-                        st_data = {'avg': '.250', 'slg': '.400'}
+                        try:
+                            # Layer 2: 2025
+                            st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
+                        except:
+                            try:
+                                # Layer 3: Career
+                                st_data = statsapi.player_stat_data(p_id, group="hitting", type="career")['stats'][0]['stats']
+                            except:
+                                st_data = {'avg': '.250', 'slg': '.400'}
                     
-                    lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
-                    avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
-                    slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
+                    lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.000'), "SLG": st_data.get('slg', '.000')})
+                    avgs.append(float(str(st_data.get('avg', '.250')).replace('.','0.')))
+                    slgs.append(float(str(st_data.get('slg', '.400')).replace('.','0.')))
 
             p_name = g_info.get(f'{side}_probable_pitcher', "TBD")
             era = 4.50
@@ -168,7 +178,7 @@ def analyze_game(gid, g_info, year, weights):
     except: return None
 
 # --- MAIN UI ---
-main_tabs = st.tabs(["Matchups", "How to Use"])
+main_tabs = st.tabs(["Matchups", "Scout Manual"])
 with main_tabs[0]:
     dt = st.date_input("Date", datetime.now())
     sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
@@ -195,7 +205,6 @@ with main_tabs[0]:
                 st.markdown('</div>', unsafe_allow_html=True)
 
                 c1, c2 = st.columns(2)
-                # FIX: Corrected variable reference from 'col' to 'c2'
                 for side, t_data, col_obj in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
                     with col_obj:
                         st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
@@ -203,11 +212,34 @@ with main_tabs[0]:
                         else: st.warning("Official Lineup not yet released")
 
 with main_tabs[1]:
-    st.title("📖 How to Use MLB Scout Pro")
-    st.subheader("📊 Dynamic Stat Switching")
-    st.info("The AI automatically switches from 2025 to 2026 stats once a player has enough data: Batter > 15 At-Bats | Pitcher > 10 Innings.")
+    st.title("📖 Scout Manual & AI Logic")
+    st.write("Welcome to the **MLB Scout Pro** engine. This system doesn't just look at wins and losses—it analyzes the specific strength of today's starting lineup and pitchers.")
+    
+    st.subheader("📊 Dynamic Data Switching (The AB Rule)")
+    st.info("The system uses a 'Smart Sample' logic to ensure the AI doesn't react to one lucky game.")
     st.markdown("""
-    * **Win % Weight:** Season standings influence.
-    * **Starter ERA Weight:** Pitching dominance influence.
-    * **Lineup AVG/SLG:** Offensive contact and power influence.
+    1. **Primary Source:** The AI first attempts to pull **2026 Season Stats**.
+    2. **The 15 AB Filter:** If a batter has fewer than **15 At-Bats** in 2026, the AI automatically ignores those stats as 'unreliable noise'.
+    3. **Historical Context:** If 2026 data is insufficient, it pulls the full **2025 Season Stats**.
+    4. **Safety Net:** If 2025 data is missing (e.g., a rookie), it uses **Career Averages**.
     """)
+
+    st.subheader("🎚️ Master the Weights")
+    st.write("Every slider directly changes the AI's internal 'Impact Scores'. Here is how to use them effectively:")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("### 🏆 Team Performance")
+        st.markdown("**Win % Weight**")
+        st.write("Measures 'clutch' ability and overall organization strength. If you believe the better-managed team usually wins, crank this up.")
+        st.markdown("**Starter ERA Weight**")
+        st.write("Pitching is 70% of the game. This compares the two starters. High weight here favors teams with Aces on the mound.")
+    with col2:
+        st.markdown("### ⚔️ Offensive Power")
+        st.markdown("**Lineup AVG Weight**")
+        st.write("Measures 'small ball'. High weight favors contact hitters who move runners and put the ball in play.")
+        st.markdown("**Lineup SLG Weight**")
+        st.write("Measures 'Home Run' potential. High weight favors power hitters who can change the score with one swing.")
+
+    st.markdown('<div class="scout-tip">💡 <b>Pro Tip:</b> If a dominant pitcher is facing a weak lineup, increase the <b>ERA Weight</b> to see how much they can shut down the game.</div>', unsafe_allow_html=True)
+        
