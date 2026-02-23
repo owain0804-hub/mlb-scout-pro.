@@ -74,7 +74,7 @@ if not st.session_state.auth and not st.session_state.is_guest:
         if st.button("Create Account", use_container_width=True):
             if nu and np and nu not in users_db:
                 users_db[nu] = {"pw": hash_pw(np), "weights": [30, 40, 15, 15], "fav_team": None}
-                save_users(nu)
+                save_users(users_db)
                 st.session_state.auth, st.session_state.username = True, nu
                 st.rerun()
     st.stop()
@@ -105,9 +105,10 @@ with st.sidebar:
 @st.cache_data(ttl=3600)
 def get_accurate_win_pct(tid):
     try:
-        # Check current year first, fallback to 2025
         s = statsapi.standings_data(leagueId="103,104", season=2026)
-        if not s: s = statsapi.standings_data(leagueId="103,104", season=2025)
+        # If 2026 standings are empty (pre-season), use 2025
+        if not any(div['teams'] for div in s.values()):
+            s = statsapi.standings_data(leagueId="103,104", season=2025)
         for div in s.values():
             for t in div['teams']:
                 if t['team_id'] == tid: return t['w']/(max(1, t['w']+t['l']))
@@ -130,16 +131,19 @@ def analyze_game(gid, g_info, year, weights):
             if lineup_released:
                 for i, p in enumerate(starters[:9]):
                     p_id = p['person']['id']
+                    st_data = {'avg': '.250', 'slg': '.400'} # Default
                     try:
-                        # 1. Try 2026 Stats first
-                        cur = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2026)['stats'][0]['stats']
-                        if int(cur.get('atBats', 0)) >= 15:
-                            st_data = cur
+                        # Try 2026 first
+                        raw_26 = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2026)
+                        data_26 = raw_26['stats'][0]['stats'] if raw_26.get('stats') else {}
+                        
+                        if int(data_26.get('atBats', 0)) >= 15:
+                            st_data = data_26
                         else:
-                            # 2. Fallback to 2025 if less than 15 ABs
-                            st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
-                    except:
-                        st_data = {'avg': '.250', 'slg': '.400'}
+                            # Use 2025 if 2026 ABs < 15
+                            raw_25 = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)
+                            if raw_25.get('stats'): st_data = raw_25['stats'][0]['stats']
+                    except: pass
                     
                     lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
                     avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
@@ -150,12 +154,15 @@ def analyze_game(gid, g_info, year, weights):
             if p_name != "TBD":
                 try:
                     p_id = statsapi.lookup_player(p_name)[0]['id']
-                    # Pitcher Logic: 10 Innings Pitched threshold for current season stats
-                    cur_p = statsapi.player_stat_data(p_id, group="pitching", type="season", season=2026)['stats'][0]['stats']
+                    # Pitcher threshold: 10 IP for current season
+                    raw_p26 = statsapi.player_stat_data(p_id, group="pitching", type="season", season=2026)
+                    cur_p = raw_p26['stats'][0]['stats'] if raw_p26.get('stats') else {}
+                    
                     if float(cur_p.get('inningsPitched', 0)) >= 10:
                         era = float(cur_p.get('era', 4.50))
                     else:
-                        era = float(statsapi.player_stat_data(p_id, group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
+                        raw_p25 = statsapi.player_stat_data(p_id, group="pitching", type="season", season=2025)
+                        if raw_p25.get('stats'): era = float(raw_p25['stats'][0]['stats'].get('era', 4.50))
                 except: pass
             return {"wpct": get_accurate_win_pct(tid), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
         
@@ -199,7 +206,7 @@ with main_tabs[0]:
                 st.markdown('</div>', unsafe_allow_html=True)
 
                 c1, c2 = st.columns(2)
-                for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
+                for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], col)]:
                     with col:
                         st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
                         if t_data["released"]: st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
@@ -208,10 +215,10 @@ with main_tabs[0]:
 with main_tabs[1]:
     st.title("📖 How to Use MLB Scout Pro")
     st.subheader("📊 Dynamic Stat Switching")
-    st.info("The AI now automatically switches from 2025 to 2026 stats once a player has enough data: Batter > 15 At-Bats | Pitcher > 10 Innings.")
+    st.info("The AI now prioritizes 2025 stats. It will ONLY switch to 2026 current stats if a batter has reached 15 At-Bats this season.")
     st.markdown("""
     * **Win % Weight:** Season standings influence.
     * **Starter ERA Weight:** Pitching dominance influence.
     * **Lineup AVG/SLG:** Offensive contact and power influence.
     """)
-                                                               
+        
