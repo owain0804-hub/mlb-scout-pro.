@@ -74,7 +74,7 @@ if not st.session_state.auth and not st.session_state.is_guest:
         if st.button("Create Account", use_container_width=True):
             if nu and np and nu not in users_db:
                 users_db[nu] = {"pw": hash_pw(np), "weights": [30, 40, 15, 15], "fav_team": None}
-                save_users(users_db)
+                save_users(nu)
                 st.session_state.auth, st.session_state.username = True, nu
                 st.rerun()
     st.stop()
@@ -105,7 +105,9 @@ with st.sidebar:
 @st.cache_data(ttl=3600)
 def get_accurate_win_pct(tid):
     try:
-        s = statsapi.standings_data(leagueId="103,104", season=2025)
+        # Check current year first, fallback to 2025
+        s = statsapi.standings_data(leagueId="103,104", season=2026)
+        if not s: s = statsapi.standings_data(leagueId="103,104", season=2025)
         for div in s.values():
             for t in div['teams']:
                 if t['team_id'] == tid: return t['w']/(max(1, t['w']+t['l']))
@@ -114,17 +116,12 @@ def get_accurate_win_pct(tid):
 def analyze_game(gid, g_info, year, weights):
     try: 
         box = statsapi.boxscore_data(gid)
-        if not box or 'away' not in box or 'home' not in box:
-            return None
+        if not box or 'away' not in box or 'home' not in box: return None
             
         def process(side, tid):
             side_data = box.get(side, {})
             players_data = side_data.get('players', {})
-            starters = [
-                p for p in players_data.values() 
-                if p.get('battingOrder') and p.get('battingOrder', '').endswith('00') 
-                and p.get('position', {}).get('code') != '1'
-            ]
+            starters = [p for p in players_data.values() if p.get('battingOrder') and p.get('battingOrder', '').endswith('00') and p.get('position', {}).get('code') != '1']
             starters = sorted(starters, key=lambda x: x.get('battingOrder', '999'))
             
             lineup_released = True if starters else False
@@ -134,9 +131,16 @@ def analyze_game(gid, g_info, year, weights):
                 for i, p in enumerate(starters[:9]):
                     p_id = p['person']['id']
                     try:
-                        st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
+                        # 1. Try 2026 Stats first
+                        cur = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2026)['stats'][0]['stats']
+                        if int(cur.get('atBats', 0)) >= 15:
+                            st_data = cur
+                        else:
+                            # 2. Fallback to 2025 if less than 15 ABs
+                            st_data = statsapi.player_stat_data(p_id, group="hitting", type="season", season=2025)['stats'][0]['stats']
                     except:
                         st_data = {'avg': '.250', 'slg': '.400'}
+                    
                     lineup.append({"Order": i+1, "Player": p['person']['fullName'], "AVG": st_data.get('avg', '.250'), "SLG": st_data.get('slg', '.400')})
                     avgs.append(float(st_data.get('avg', '.250').replace('.','0.')))
                     slgs.append(float(st_data.get('slg', '.400').replace('.','0.')))
@@ -145,11 +149,13 @@ def analyze_game(gid, g_info, year, weights):
             era = 4.50
             if p_name != "TBD":
                 try:
-                    p_search = statsapi.lookup_player(p_name)[0]
-                    try:
-                        era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
-                    except:
-                        era = float(statsapi.player_stat_data(p_search['id'], group="pitching", type="career", season=2025)['stats'][0]['stats'].get('era', 4.50))
+                    p_id = statsapi.lookup_player(p_name)[0]['id']
+                    # Pitcher Logic: 10 Innings Pitched threshold for current season stats
+                    cur_p = statsapi.player_stat_data(p_id, group="pitching", type="season", season=2026)['stats'][0]['stats']
+                    if float(cur_p.get('inningsPitched', 0)) >= 10:
+                        era = float(cur_p.get('era', 4.50))
+                    else:
+                        era = float(statsapi.player_stat_data(p_id, group="pitching", type="season", season=2025)['stats'][0]['stats'].get('era', 4.50))
                 except: pass
             return {"wpct": get_accurate_win_pct(tid), "era": era, "avg": sum(avgs)/9 if avgs else 0.25, "slg": sum(slgs)/9 if slgs else 0.4, "p": p_name, "lineup": lineup, "released": lineup_released}
         
@@ -167,13 +173,11 @@ def analyze_game(gid, g_info, year, weights):
 
 # --- MAIN UI ---
 main_tabs = st.tabs(["Matchups", "How to Use"])
-
 with main_tabs[0]:
     dt = st.date_input("Date", datetime.now())
     sched = statsapi.schedule(date=dt.strftime("%m/%d/%Y"))
     fav = user_data.get("fav_team")
-    if fav:
-        sched = sorted(sched, key=lambda x: (fav not in x['away_name'] and fav not in x['home_name']))
+    if fav: sched = sorted(sched, key=lambda x: (fav not in x['away_name'] and fav not in x['home_name']))
 
     for g in sched:
         is_fav = fav and (fav in g['away_name'] or fav in g['home_name'])
@@ -181,14 +185,13 @@ with main_tabs[0]:
         
         if st.button("Analyze", key=g['game_id'], use_container_width=True):
             data = analyze_game(g['game_id'], g, dt.year, [w_win, w_era, w_avg, w_slg])
-            if data is None:
-                st.warning("Game data is currently incomplete or unavailable in the MLB API.")
+            if data is None: st.warning("Game data is currently incomplete.")
             else:
                 winner = g['home_name'] if data['prob'] > 0.5 else g['away_name']
                 st.markdown(f'<div class="mobile-row"><div class="metric-box-2"><small>WIN PROBABILITY</small><br><b>{max(data["prob"], 1-data["prob"])*100:.1f}%</b> <span style="color:#4ade80">{winner}</span></div></div>', unsafe_allow_html=True)
                 st.write(f"### 🧠 AI Logic Breakdown")
                 st.markdown('<div class="analysis-box">', unsafe_allow_html=True)
-                st.markdown(f"**Records:** {g['away_name']} ({data['away']['wpct']:.3f} Win%) vs {g['home_name']} ({data['home']['wpct']:.3f} Win%)")
+                st.markdown(f"**Records:** {g['away_name']} vs {g['home_name']} (Season Context Applied)")
                 st.markdown(f"**Starting Pitchers:** {g['away_name']} ({data['away']['era']} ERA) vs {g['home_name']} ({data['home']['era']} ERA)")
                 for factor, val in data['impacts'].items():
                     team_with_edge = g['home_name'] if val > 0 else g['away_name']
@@ -199,22 +202,16 @@ with main_tabs[0]:
                 for side, t_data, col in [('Away', data['away'], c1), ('Home', data['home'], c2)]:
                     with col:
                         st.markdown(f'<div class="pitcher-header">{t_data["p"]} (ERA: {t_data["era"]})</div>', unsafe_allow_html=True)
-                        if t_data["released"]:
-                            st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
-                        else:
-                            st.warning("Official Lineup not yet released")
+                        if t_data["released"]: st.dataframe(pd.DataFrame(t_data['lineup']), hide_index=True)
+                        else: st.warning("Official Lineup not yet released")
 
 with main_tabs[1]:
     st.title("📖 How to Use MLB Scout Pro")
-    st.write("This app uses a custom AI logic engine to analyze MLB matchups. Use the sidebar to tune the weights according to what you value most in a winning team.")
-    
-    st.subheader("🎚️ Understanding the Sliders")
+    st.subheader("📊 Dynamic Stat Switching")
+    st.info("The AI now automatically switches from 2025 to 2026 stats once a player has enough data: Batter > 15 At-Bats | Pitcher > 10 Innings.")
     st.markdown("""
-    * **Win % Weight:** Determines how much a team's overall season success (2025 Standing) influences the prediction. High weight favors consistently winning teams.
-    * **Starter ERA Weight:** Influences the impact of the starting pitcher's Earned Run Average. Higher weights give more 'Win Chance' to the team with the lower ERA.
-    * **Lineup AVG Weight:** Adjusts how much the team's ability to get hits (Contact) matters. High weight favors high-average hitters.
-    * **Lineup SLG Weight:** Adjusts the impact of Power (Slugging). High weight favors teams that hit more extra-base hits and home runs.
+    * **Win % Weight:** Season standings influence.
+    * **Starter ERA Weight:** Pitching dominance influence.
+    * **Lineup AVG/SLG:** Offensive contact and power influence.
     """)
-    
-    st.subheader("🛡️ Data Protection")
-    st.write("The app locks lineups until they are officially released by the MLB. If you see 'Official Lineup not yet released', the AI is waiting for the confirmed daily roster to ensure accuracy.")
+                                                               
